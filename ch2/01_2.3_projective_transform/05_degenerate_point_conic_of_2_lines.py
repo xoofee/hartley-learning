@@ -15,6 +15,12 @@ you may using opencv and matplotlit in python
 
 import cv2
 import numpy as np
+
+import matplotlib
+matplotlib.use("TkAgg")
+# to avoid on windows
+# File "c:\App\Python\env\xf\Lib\site-packages\matplotlib\backends\backend_qt.py", line 166, in _may_clear_sock rsock.recv(1) OSError: [WinError 10038] 在一个非套接字上尝试了一个操作。
+
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
@@ -27,6 +33,8 @@ fig = None
 ax = None
 image_rgb = None
 
+NUM_POINTS = 4
+
 def on_click(event):
     """Callback function for matplotlib mouse clicks"""
     global clicked_points, fig, ax, image_rgb
@@ -35,12 +43,12 @@ def on_click(event):
         return
     
     if event.button == 1:  # Left mouse button
-        if len(clicked_points) < 5:
+        if len(clicked_points) < NUM_POINTS:
             x, y = event.xdata, event.ydata
             clicked_points.append([x, y])
             
             # Draw a circle at the clicked point
-            circle = Circle((x, y), 10, color='lime', fill=True)
+            circle = Circle((x, y), 5, color='lime', fill=False)
             ax.add_patch(circle)
             ax.text(x + 15, y - 15, f"Point {len(clicked_points)}", 
                    color='lime', fontsize=12, weight='bold')
@@ -48,11 +56,18 @@ def on_click(event):
             
             print(f"Point {len(clicked_points)}: ({x:.1f}, {y:.1f})")
             
-            if len(clicked_points) == 4:
-                print("All 4 points selected! Close the window to continue...")
+            if len(clicked_points) == NUM_POINTS:
+                print(f"All {NUM_POINTS} points selected! Auto-closing window...")
+                # Auto-close the window after a short delay to allow the last point to be visible
+                import threading
+                def close_figure():
+                    import time
+                    time.sleep(0.3)  # Small delay to show the last point
+                    plt.close(fig)
+                threading.Thread(target=close_figure, daemon=True).start()
 
 def select_points(image):
-    """Display image and let user click 4 points using matplotlib"""
+    """Display image and let user click NUM_POINTS points using matplotlib"""
     global clicked_points, fig, ax, image_rgb
     clicked_points = []
     
@@ -62,18 +77,18 @@ def select_points(image):
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(12, 8))
     ax.imshow(image_rgb)
-    ax.set_title('Click 4 points on the window corners\n(in order: top-left, top-right, bottom-right, bottom-left)', 
+    ax.set_title(f'Click {NUM_POINTS} points on the window corners\n(in order: top-left, top-right, bottom-right, bottom-left)', 
                 fontsize=12)
     ax.axis('off')
     
     # Connect the click event
     fig.canvas.mpl_connect('button_press_event', on_click)
     
-    print("Click 5 points on an conic")
+    print(f"Click {NUM_POINTS} points on an conic")
     plt.show()
     
-    if len(clicked_points) != 5:
-        print("Warning: Not all 5 points were selected!")
+    if len(clicked_points) != NUM_POINTS:
+        print(f"Warning: Not all {NUM_POINTS} points were selected!")
     
     return np.array(clicked_points, dtype=np.float32)
 
@@ -107,27 +122,23 @@ def draw_conic(image, conic, color=(0, 0, 255), threshold=0.02):
     d = conic[0, 2]*2
     e = conic[1, 2]*2
     f = conic[2, 2]
-    values = a * X**2 + b * X * Y + c * Y**2 + d * X + e * Y + f
+    conic_value_matrix = a * X**2 + b * X * Y + c * Y**2 + d * X + e * Y + f
 
-    mask = np.bitwise_and(values < threshold, values >= 0.0)
+    conic_value_matrix_abs = np.abs(conic_value_matrix)
+    conic_value_matrix_abs_max = np.max(conic_value_matrix_abs)
+
+    mask = conic_value_matrix_abs < conic_value_matrix_abs_max * threshold
+
+    # mask = np.bitwise_and(conic_value_matrix < threshold, conic_value_matrix >= 0.0)
     image[mask] = color
 
-    return image
+    return image, conic_value_matrix, mask
 
-def get_conic_from_5_point(points):
-    """Get a conic from 5 points"""
-    A = np.zeros((5, 6))
-    for i in range(5):
-        x = points[i, 0]
-        y = points[i, 1]
-        A[i, :] = [x**2, x*y, y**2, x, y, 1]
-    
-    U, S, Vt = np.linalg.svd(A)
-    a,b,c,d,e,f = Vt[-1, :]
-    
-    return np.array([[a, b/2, d/2],
-                     [b/2, c, e/2],
-                     [d/2, e/2, f]])
+def get_degenerateconic_from_2_lines(line1, line2):
+    """Get a degenerate conic from 2 lines"""
+    line1 = line1.reshape(3, 1)
+    line2 = line2.reshape(3, 1)
+    return line1 @ line2.T + line2 @ line1.T
 
 def main():
     # 1. Load the building.jpg image
@@ -169,17 +180,26 @@ def main():
     # 2. Let user click 5 points
     src_points = select_points(image)
     
-    if len(src_points) != 5:
-        print("Error: Need exactly 5 points")
+    if len(src_points) != NUM_POINTS:
+        print(f"Error: Need exactly {NUM_POINTS} points")
         return
     
-    conic = get_conic_from_5_point(src_points)
-    print(f"conic: {conic}")
-    image = draw_conic(image, conic, color=(0, 0, 255), threshold=0.05)
+    p1 = np.array([src_points[0, 0], src_points[0, 1], 1])
+    p2 = np.array([src_points[1, 0], src_points[1, 1], 1])
+    p3 = np.array([src_points[2, 0], src_points[2, 1], 1])
+    p4 = np.array([src_points[3, 0], src_points[3, 1], 1])
+    
+    line1 = np.cross(p1, p2)
+    line2 = np.cross(p3, p4)
 
-    p0 = np.array([src_points[0, 0], src_points[0, 1], 1])
-    line = conic @ p0
-    image = draw_line(image, line, color=(0, 255, 0), thickness=2)
+    conic = get_degenerateconic_from_2_lines(line1, line2)
+
+    print(f"conic: {conic}")
+    image, conic_value_matrix, mask = draw_conic(image, conic, color=(0, 0, 255), threshold=0.01)
+
+    # p0 = np.array([src_points[0, 0], src_points[0, 1], 1])
+    # line = conic @ p0
+    # image = draw_line(image, line, color=(0, 255, 0), thickness=2)
 
 
     # 6. Show the two images side by side using matplotlib
@@ -189,11 +209,11 @@ def main():
     image_with_points = image.copy()
     for i, point in enumerate(src_points):
         pt = tuple(map(int, point))
-        cv2.circle(image_with_points, pt, 8, (0, 255, 0), -1)
+        cv2.circle(image_with_points, pt, 4, (0, 255, 0), -1)
         cv2.putText(image_with_points, str(i+1), (pt[0]+10, pt[1]-10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     
-    # Convert BGR to RGB for matplotlib
+    # Convert BGR to RGB for matplotli
     ax.imshow(cv2.cvtColor(image_with_points, cv2.COLOR_BGR2RGB))
     ax.set_title('Original Image with Selected Points', fontsize=12)
     ax.axis('off')
