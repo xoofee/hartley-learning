@@ -1,4 +1,33 @@
 """
+
+
+Example 2.19. Computing a vanishing point from a length ratio. Given two intervals
+on a line with a known length ratio, the point at infinity on the line may be
+determined. A typical case is where three points a, b and c are identified on a line in
+an image. Suppose a, b and c are the corresponding collinear points on the world line,
+and the length ratio d(a, b) : d(b, c) = a : b is known (where d(x, y) is the Euclidean
+2.7 Recovery of affine and metric properties from images 51
+Fig. 2.14. Two examples of using equal length ratios on a line to determine the point at infinity. The
+line intervals used are shown as the thin and thick white lines delineated by points. This construction
+determines the vanishing line of the plane. Compare with figure 2.13c.
+distance between the points x and y). It is possible to find the vanishing point using
+the cross ratio. Equivalently, one may proceed as follows:
+(i) Measure the distance ratio in the image, d(a, b) : d(b, c) = a : b.
+(ii) Points a, b and c may be represented as coordinates 0, a and a+b in a coordinate
+frame on the line a, b, c	. For computational purposes, these points are represented
+by homogeneous 2-vectors (0, 1)T, (a, 1)T and (a + b, 1)T. Similarly,
+a, b and c have coordinates 0, a and a + b, which may also be expressed as
+homogeneous vectors.
+(iii) Relative to these coordinate frames, compute the 1D projective transformation
+H2×2 mapping a → a, b → b and c → c.
+(iv) The image of the point at infinity (with coordinates (1, 0)T) under H2×2 is the
+vanishing point on the line a, b, c	.
+An example of vanishing points computed in this manner is shown in figure 2.14. 
+
+
+
+
+
 1 load the image like in ch2\2.7_recovery_affine\03_affine_recovery_of_a_floor.py
 2 let the user click 3 colinear points on the image, say, A, B, C, note B is between A and C
 3 a = AB , b = BC in eucludian distance
