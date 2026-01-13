@@ -83,6 +83,43 @@ def find_homography_normalized(src_points, dst_points):
     return H
 
 
+def find_invariant_points(H):
+    """
+    Find invariant points (fixed points) of homography H using eigenvector analysis.
+    Invariant points satisfy H * x = λ * x for some scalar λ.
+    
+    Args:
+        H: (3, 3) homography matrix
+    
+    Returns:
+        invariant_points: list of (x, y) pixel coordinates of invariant points
+        eigenvalues: corresponding eigenvalues
+    """
+    # Compute eigenvalues and eigenvectors
+    eigenvalues, eigenvectors = np.linalg.eig(H)
+    
+    invariant_points = []
+    valid_eigenvalues = []
+    
+    # Process each eigenvector
+    for i, (eigenval, eigenvec) in enumerate(zip(eigenvalues, eigenvectors.T)):
+        # Normalize eigenvector (make it real if possible)
+        eigenvec = eigenvec.real if np.allclose(eigenvec.imag, 0) else eigenvec
+        
+        # Check if point is at infinity (third component close to zero)
+        if abs(eigenvec[2]) > 1e-10:
+            # Convert from homogeneous to pixel coordinates
+            x = eigenvec[0] / eigenvec[2]
+            y = eigenvec[1] / eigenvec[2]
+            invariant_points.append((x, y))
+            valid_eigenvalues.append(eigenval)
+        else:
+            # Point at infinity
+            print(f"Eigenvalue {i+1}: {eigenval:.6f} -> Point at infinity (skipped)")
+    
+    return invariant_points, valid_eigenvalues
+
+
 def generate_grid_image(width=800, height=600, grid_spacing=50):
     """Generate an image with vertical and horizontal lines (grid)"""
     img = np.ones((height, width, 3), dtype=np.uint8) * 255
@@ -186,7 +223,25 @@ def main():
     
     # 3. Calculate the projective transform matrix (homography)
     H = find_homography_normalized(src_points, dst_points)
+    # Print H without scientific notation
+    np.set_printoptions(suppress=True, precision=6)
     print(f"\nHomography matrix H:\n{H}")
+    np.set_printoptions(suppress=False)  # Reset to default
+    
+    # Calculate invariant points using eigenvector analysis
+    print("\n" + "="*60)
+    print("INVARIANT POINTS ANALYSIS (Eigenvector Analysis)")
+    print("="*60)
+    invariant_points, eigenvalues = find_invariant_points(H)
+    
+    print(f"\nFound {len(invariant_points)} invariant point(s) in pixel coordinates:")
+    for i, (point, eigenval) in enumerate(zip(invariant_points, eigenvalues)):
+        x, y = point
+        print(f"  Invariant Point {i+1}: ({x:.2f}, {y:.2f}) pixels, eigenvalue: {eigenval:.6f}")
+    
+    if len(invariant_points) == 0:
+        print("  (All invariant points are at infinity)")
+    print("="*60 + "\n")
     
     # 4. Apply the projective transform matrix to the image
     h, w = image.shape[:2]
@@ -210,13 +265,60 @@ def main():
         cv2.putText(image_with_points, f"D{i+1}", (pt[0]+10, pt[1]-10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
     
+    # Draw invariant points (fixed points) in blue on original image
+    for i, point in enumerate(invariant_points):
+        x, y = point
+        pt = (int(x), int(y))
+        # Check if point is within image bounds
+        if 0 <= pt[0] < w and 0 <= pt[1] < h:
+            cv2.circle(image_with_points, pt, 10, (255, 0, 0), 2)  # Blue circle with thickness 2
+            cv2.putText(image_with_points, f"F{i+1}", (pt[0]+15, pt[1]-15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+    
     # Convert BGR to RGB for matplotlib
     axes[0].imshow(cv2.cvtColor(image_with_points, cv2.COLOR_BGR2RGB))
-    axes[0].set_title('Original Image with Selected Points\n(Green=Source, Red=Destination)', fontsize=12)
+    axes[0].set_title('Original Image with Selected Points\n(Green=Source, Red=Destination, Blue=Fixed Points)', fontsize=12)
     axes[0].axis('off')
     
-    axes[1].imshow(cv2.cvtColor(transformed_image, cv2.COLOR_BGR2RGB))
-    axes[1].set_title('Transformed Image', fontsize=12)
+    # Transform the 8 points and draw them on the transformed image
+    transformed_image_with_points = transformed_image.copy()
+    
+    # Transform source points (where they end up after transformation)
+    src_points_h = np.hstack([src_points, np.ones((src_points.shape[0], 1))])
+    transformed_src_points_h = (H @ src_points_h.T).T
+    transformed_src_points = transformed_src_points_h[:, :2] / transformed_src_points_h[:, 2:3]
+    
+    # Draw transformed source points in green
+    for i, point in enumerate(transformed_src_points):
+        pt = tuple(map(int, point))
+        # Check if point is within image bounds
+        if 0 <= pt[0] < w and 0 <= pt[1] < h:
+            cv2.circle(transformed_image_with_points, pt, 8, (0, 255, 0), -1)
+            cv2.putText(transformed_image_with_points, f"S{i+1}", (pt[0]+10, pt[1]-10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    
+    # Draw destination points in red (where they should be)
+    for i, point in enumerate(dst_points):
+        pt = tuple(map(int, point))
+        # Check if point is within image bounds
+        if 0 <= pt[0] < w and 0 <= pt[1] < h:
+            cv2.circle(transformed_image_with_points, pt, 8, (0, 0, 255), -1)
+            cv2.putText(transformed_image_with_points, f"D{i+1}", (pt[0]+10, pt[1]-10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    
+    # Draw invariant points (fixed points) in blue on transformed image
+    # Since they are invariant, they should appear at the same location
+    for i, point in enumerate(invariant_points):
+        x, y = point
+        pt = (int(x), int(y))
+        # Check if point is within image bounds
+        if 0 <= pt[0] < w and 0 <= pt[1] < h:
+            cv2.circle(transformed_image_with_points, pt, 10, (255, 0, 0), 2)  # Blue circle with thickness 2
+            cv2.putText(transformed_image_with_points, f"F{i+1}", (pt[0]+15, pt[1]-15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+    
+    axes[1].imshow(cv2.cvtColor(transformed_image_with_points, cv2.COLOR_BGR2RGB))
+    axes[1].set_title('Transformed Image with Points\n(Green=Transformed Source, Red=Destination, Blue=Fixed Points)', fontsize=12)
     axes[1].axis('off')
     
     plt.tight_layout()
