@@ -97,6 +97,10 @@ def construct_homography_from_fixed_points(fixed_points, eigenvalues):
         
         # Construct eigenvalue matrix
         Lambda = np.diag(eigenvalues)
+
+        # if np.abs(eigenvalues[0]-eigenvalues[1]) < 1e-6:
+        #     print("Eigenvalues [0] [1] are nearly equal!")
+        #     Lambda[0, 1] = 1.0      # Jordan form
         
         # H = V * Lambda * V^-1
         # where V is the matrix of eigenvectors (fixed points in homogeneous coords)
@@ -1009,6 +1013,7 @@ class MainWindow(QMainWindow):
         self.Hs, self.Ha, self.Hp = decompose_homography(self.H)
         # Update invariant points and eigenvalues (for updating fixed points and eigenvalues)
         computed_invariant_points, computed_eigenvalues = find_invariant_points(self.H)
+
         if len(computed_eigenvalues) >= 3:
             real_eigenvalues = [eig for eig in computed_eigenvalues if abs(eig.imag) < 1e-10]
             if len(real_eigenvalues) >= 3:
@@ -1016,6 +1021,11 @@ class MainWindow(QMainWindow):
                 self.eigenvalue_editor.updating = True
                 self.eigenvalue_editor.set_eigenvalues(self.eigenvalues)
                 self.eigenvalue_editor.updating = False
+
+        # Print computed invariant points in the same format as fixed points
+        for i, (x, y) in enumerate(computed_invariant_points[:3], 1):
+            print(f"Fixed point {i}: ({x:.1f}, {y:.1f})")
+
         # Update fixed points (they should be eigenvectors of H)
         if len(computed_invariant_points) >= 3:
             # Update fixed points to match the first 3 invariant points
@@ -1101,6 +1111,14 @@ class MainWindow(QMainWindow):
                 self.eigenvalue_editor.updating = True
                 self.eigenvalue_editor.set_eigenvalues(self.eigenvalues)
                 self.eigenvalue_editor.updating = False
+
+        for i, eig in enumerate(computed_eigenvalues, 1):
+            print(f"computed_eigenvalues {i}: {eig:.6f}")
+
+        # Print computed invariant points in the same format as fixed points
+        for i, (x, y) in enumerate(computed_invariant_points[:3], 1):
+            print(f"Fixed point {i}: ({x:.1f}, {y:.1f})")
+
         # Update fixed points
         if len(computed_invariant_points) >= 3:
             self.fixed_points = [[x, y] for x, y in computed_invariant_points[:3]]
