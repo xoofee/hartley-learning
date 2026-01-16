@@ -1,5 +1,5 @@
 """
-A7.3 Elation on P.61 of the book 
+A7.3 Elation on P.631 of the book 
 
 write a python script to 
 1 load the building.jpg image (source)
@@ -22,6 +22,30 @@ you may use opencv or matplotlib or PyQt5 that you think is the best for the tas
 make the image zoomable (by mouse wheel) and draggable (by mouse right button)
 
 do not remove this comment.
+
+[for youtube]
+Title:
+Interactive Elation Transformation: Drag Windows in Projective Space | Computer Vision Tutorial
+
+Introduction:
+Welcome to this computer vision tutorial on elation transformations! In this video, I'll demonstrate an interactive PyQt5 application that lets you drag windows in projective space using homography matrices.
+
+Here's what we'll cover:
+- How to calculate homography matrices from point correspondences
+- Understanding the elation transformation formula: P = H × T × inv(H)
+- Implementing real-time window translation in world coordinates
+- Creating an interactive GUI with zoom, pan, and drag functionality
+
+The application allows you to:
+1. Click 4 points to mark a window with perspective distortion
+2. Automatically calculate the homography from image to world coordinates
+3. Drag the window center point to translate it in world space
+4. See the window transform and imprint on the source image in real-time
+
+This is based on section A7.3 (Elation) from Hartley & Zisserman's "Multiple View Geometry" book, demonstrating how translations in world coordinates appear as projective transformations in image space.
+
+Let's dive in and see how projective geometry makes this possible!
+
 
 """
 
