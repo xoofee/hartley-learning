@@ -199,7 +199,7 @@ def calculate_destination_points(src_points):
 
 def main():
     # 1. Load the building.jpg image
-    image_path = r'ch2\01_2.3_perspetive_correction\building.jpg'
+    image_path = r'ch2\2.3_projective_transform\building.jpg'
     image = cv2.imread(image_path)
     
     if image is None:
