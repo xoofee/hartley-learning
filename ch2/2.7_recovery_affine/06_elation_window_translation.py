@@ -6,11 +6,11 @@ write a python script to
 2 pop out the window to let the user click 4 points (image points)
 the point will be the corner of a window but projectively imaged near vertically
 3 set the destionation(world) points near the original position but no perspective distortion
-4 calculate the H matrix
+4 calculate the H matrix (image to world)
 5 let the user dynamically drag the window center point to any position
 6 calculate the translation vector in the world coordinate system
 7 calculate the transform matrix P by
-    P = H * T * inv(H)
+    P = H_world_to_image * T * inv(H_world_to_image)
     where the T is the translation matrix in the world coordinate system
 8 transform the window using the P
 9 imprint the window on the source
@@ -18,6 +18,8 @@ the point will be the corner of a window but projectively imaged near vertically
    the imprint should be dynamically updated as the window is dragged
 
 you may use opencv or matplotlib or PyQt5 that you think is the best for the task
+
+make the image zoomable (by mouse wheel) and draggable (by mouse right button)
 
 do not remove this comment.
 
@@ -131,12 +133,26 @@ class ImageWidget(QWidget):
         self.selection_mode = True  # True: selection mode, False: dragging mode
         self.setMinimumSize(800, 600)
         self.update_cursor()
+        
+        # Zoom and pan state
+        self.zoom_factor = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.panning = False
+        self.last_pan_pos = None
     
     def set_image(self, image):
         """Set the original image"""
         self.image = image.copy()
         self.display_image = image.copy()
         self.update_cursor()
+        self.update()
+    
+    def reset_zoom_pan(self):
+        """Reset zoom and pan to default values"""
+        self.zoom_factor = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
         self.update()
     
     def update_cursor(self):
@@ -172,22 +188,27 @@ class ImageWidget(QWidget):
         self.update()
     
     def widget_to_image_coords(self, widget_x, widget_y):
-        """Convert widget coordinates to image coordinates, accounting for scaling and padding"""
+        """Convert widget coordinates to image coordinates, accounting for scaling, padding, zoom and pan"""
         if self.image is None:
             return widget_x, widget_y
         
         pixmap_size = self.size()
         img_h, img_w = self.image.shape[:2]
         
-        # Calculate scale to fit (same as in paintEvent)
+        # Calculate base scale to fit (same as in paintEvent)
         scale_x = pixmap_size.width() / img_w
         scale_y = pixmap_size.height() / img_h
-        scale = min(scale_x, scale_y)
+        base_scale = min(scale_x, scale_y)
+        
+        # Apply zoom
+        scale = base_scale * self.zoom_factor
         
         scaled_w = img_w * scale
         scaled_h = img_h * scale
-        x_offset = (pixmap_size.width() - scaled_w) / 2
-        y_offset = (pixmap_size.height() - scaled_h) / 2
+        
+        # Calculate offsets with pan
+        x_offset = (pixmap_size.width() - scaled_w) / 2 + self.pan_x
+        y_offset = (pixmap_size.height() - scaled_h) / 2 + self.pan_y
         
         # Convert widget coordinates to image coordinates
         img_x = (widget_x - x_offset) / scale
@@ -217,10 +238,23 @@ class ImageWidget(QWidget):
                     if self.window_center is not None and self.window_center.contains(img_x, img_y):
                         self.dragged_point_idx = -1  # Special index for window center
                         self.window_center.dragging = True
+        elif event.button() == Qt.RightButton:
+            # Start panning
+            self.panning = True
+            self.last_pan_pos = (event.x(), event.y())
+            self.setCursor(Qt.ClosedHandCursor)
     
     def mouseMoveEvent(self, event):
         """Handle mouse move (dragging)"""
-        if self.dragged_point_idx is not None and self.image is not None:
+        if self.panning and self.last_pan_pos is not None:
+            # Panning with right mouse button
+            dx = event.x() - self.last_pan_pos[0]
+            dy = event.y() - self.last_pan_pos[1]
+            self.pan_x += dx
+            self.pan_y += dy
+            self.last_pan_pos = (event.x(), event.y())
+            self.update()
+        elif self.dragged_point_idx is not None and self.image is not None:
             x = event.x()
             y = event.y()
             # Convert to image coordinates
@@ -244,6 +278,61 @@ class ImageWidget(QWidget):
                 if self.dragged_point_idx == -1:
                     self.window_center.dragging = False
                 self.dragged_point_idx = None
+        elif event.button() == Qt.RightButton:
+            # Stop panning
+            self.panning = False
+            self.last_pan_pos = None
+            self.update_cursor()
+    
+    def wheelEvent(self, event):
+        """Handle mouse wheel for zooming"""
+        if self.image is None:
+            return
+        
+        # Get mouse position in widget coordinates
+        mouse_x = event.x()
+        mouse_y = event.y()
+        
+        # Get image coordinates before zoom (point under cursor)
+        img_x, img_y = self.widget_to_image_coords(mouse_x, mouse_y)
+        
+        # Zoom factor change
+        zoom_delta = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
+        new_zoom = self.zoom_factor * zoom_delta
+        
+        # Limit zoom range
+        new_zoom = max(0.1, min(10.0, new_zoom))
+        
+        if new_zoom != self.zoom_factor:
+            # Calculate new pan to keep the point under cursor fixed
+            pixmap_size = self.size()
+            img_h, img_w = self.image.shape[:2]
+            scale_x = pixmap_size.width() / img_w
+            scale_y = pixmap_size.height() / img_h
+            base_scale = min(scale_x, scale_y)
+            
+            old_scale = base_scale * self.zoom_factor
+            new_scale = base_scale * new_zoom
+            
+            # Calculate where the image point should be after zoom
+            # Old position: mouse_x = (img_x * old_scale) + old_x_offset
+            # New position: mouse_x = (img_x * new_scale) + new_x_offset
+            # We want: old_x_offset + img_x * old_scale = new_x_offset + img_x * new_scale
+            old_x_offset = (pixmap_size.width() - img_w * old_scale) / 2 + self.pan_x
+            old_y_offset = (pixmap_size.height() - img_h * old_scale) / 2 + self.pan_y
+            
+            # Calculate what the new offset should be to keep the point under cursor
+            new_x_offset = mouse_x - img_x * new_scale
+            new_y_offset = mouse_y - img_y * new_scale
+            
+            # Calculate new pan
+            base_x_offset = (pixmap_size.width() - img_w * new_scale) / 2
+            base_y_offset = (pixmap_size.height() - img_h * new_scale) / 2
+            self.pan_x = new_x_offset - base_x_offset
+            self.pan_y = new_y_offset - base_y_offset
+            
+            self.zoom_factor = new_zoom
+            self.update()
     
     def paintEvent(self, event):
         """Paint the image and points"""
@@ -258,47 +347,53 @@ class ImageWidget(QWidget):
         img_h, img_w = self.display_image.shape[:2]
         scale_x = pixmap_size.width() / img_w
         scale_y = pixmap_size.height() / img_h
-        scale = min(scale_x, scale_y)
+        base_scale = min(scale_x, scale_y)
+        
+        # Apply zoom
+        scale = base_scale * self.zoom_factor
         
         scaled_w = int(img_w * scale)
         scaled_h = int(img_h * scale)
-        x_offset = (pixmap_size.width() - scaled_w) // 2
-        y_offset = (pixmap_size.height() - scaled_h) // 2
         
-        # Draw display image
-        qimg = QImage(self.display_image.data, img_w, img_h, img_w * 3, QImage.Format_RGB888).rgbSwapped()
+        # Apply pan offset
+        x_offset = (pixmap_size.width() - scaled_w) / 2 + self.pan_x
+        y_offset = (pixmap_size.height() - scaled_h) / 2 + self.pan_y
+        
+        # Draw display image (already in RGB format)
+        qimg = QImage(self.display_image.data, img_w, img_h, img_w * 3, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qimg).scaled(scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        painter.drawPixmap(x_offset, y_offset, pixmap)
+        painter.drawPixmap(int(x_offset), int(y_offset), pixmap)
         
         # Draw corner points as crosses
         for point in self.points:
             x = int(x_offset + point.x * scale)
             y = int(y_offset + point.y * scale)
-            cross_size = point.radius * 2
-            pen = QPen(QColor(*point.color), 2)
+            cross_size = int(point.radius * 2 * self.zoom_factor)  # Scale cross size with zoom
+            pen = QPen(QColor(*point.color), max(1, int(2 * self.zoom_factor)))
             painter.setPen(pen)
             # Draw cross
             painter.drawLine(x - cross_size, y, x + cross_size, y)
             painter.drawLine(x, y - cross_size, x, y + cross_size)
             # Draw label
             painter.setPen(QColor(0, 0, 0))
-            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            font_size = max(8, int(10 * self.zoom_factor))
+            painter.setFont(QFont("Arial", font_size, QFont.Bold))
             painter.drawText(x + cross_size + 5, y - cross_size, point.label)
         
         # Draw window center point
         if self.window_center is not None:
             x = int(x_offset + self.window_center.x * scale)
             y = int(y_offset + self.window_center.y * scale)
-            pen = QPen(QColor(*self.window_center.color), 3)
+            radius = int(self.window_center.radius * self.zoom_factor)  # Scale radius with zoom
+            pen = QPen(QColor(*self.window_center.color), max(1, int(3 * self.zoom_factor)))
             painter.setPen(pen)
             painter.setBrush(QColor(*self.window_center.color))
-            painter.drawEllipse(x - self.window_center.radius, y - self.window_center.radius, 
-                              self.window_center.radius * 2, self.window_center.radius * 2)
+            painter.drawEllipse(x - radius, y - radius, radius * 2, radius * 2)
             # Draw label
             painter.setPen(QColor(0, 0, 0))
-            painter.setFont(QFont("Arial", 12, QFont.Bold))
-            painter.drawText(x + self.window_center.radius + 5, y - self.window_center.radius, 
-                           self.window_center.label)
+            font_size = max(8, int(12 * self.zoom_factor))
+            painter.setFont(QFont("Arial", font_size, QFont.Bold))
+            painter.drawText(x + radius + 5, y - radius, self.window_center.label)
         
         self.scale_factor = scale
         self.x_offset = x_offset
@@ -352,7 +447,8 @@ class MainWindow(QMainWindow):
         """Load the building.jpg image"""
         try:
             # Try to load from current directory
-            img_path = r'ch2\2.3_projective_transform\building.jpg'
+            # img_path = r'ch2\2.3_projective_transform\building.jpg'
+            img_path = r'ch2\2.3_projective_transform\church.jpg'
             self.image = cv2.imread(img_path)
 
             if self.image is None:
@@ -383,6 +479,7 @@ class MainWindow(QMainWindow):
         self.image_widget.points = []
         self.image_widget.window_center = None
         self.image_widget.set_selection_mode(True)
+        self.image_widget.reset_zoom_pan()
         self.image_widget.set_image(self.image_rgb)
         self.update()
     
