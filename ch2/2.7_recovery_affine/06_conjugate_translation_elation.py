@@ -472,6 +472,10 @@ class MainWindow(QMainWindow):
         try:
             # Try to load from current directory
             # img_path = r'ch2\2.3_projective_transform\building.jpg'
+            
+            # Sacred Heart of Jesus Catholic Church
+            # https://www.tripadvisor.com/Attraction_Review-g297715-d27165973-Reviews-Sacred_Heart_of_Jesus_Catholic_Church-Surabaya_East_Java_Java.html
+
             img_path = r'ch2\2.3_projective_transform\church.jpg'
             self.image = cv2.imread(img_path)
 
