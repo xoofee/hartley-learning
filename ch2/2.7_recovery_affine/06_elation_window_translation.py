@@ -1,4 +1,5 @@
 """
+A7.3 Elation on P.61 of the book 
 
 write a python script to 
 1 load the building.jpg image (source)
@@ -28,7 +29,7 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QMessageBox)
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
+from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont, QCursor
 
 
 def normalize_points(points):
@@ -129,12 +130,26 @@ class ImageWidget(QWidget):
         self.dragged_point_idx = None
         self.selection_mode = True  # True: selection mode, False: dragging mode
         self.setMinimumSize(800, 600)
+        self.update_cursor()
     
     def set_image(self, image):
         """Set the original image"""
         self.image = image.copy()
         self.display_image = image.copy()
+        self.update_cursor()
         self.update()
+    
+    def update_cursor(self):
+        """Update cursor based on selection mode"""
+        if self.selection_mode:
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+    
+    def set_selection_mode(self, mode):
+        """Set selection mode and update cursor"""
+        self.selection_mode = mode
+        self.update_cursor()
     
     def set_points(self, points, colors, labels):
         """Set the draggable points"""
@@ -156,6 +171,30 @@ class ImageWidget(QWidget):
         self.display_image = image.copy()
         self.update()
     
+    def widget_to_image_coords(self, widget_x, widget_y):
+        """Convert widget coordinates to image coordinates, accounting for scaling and padding"""
+        if self.image is None:
+            return widget_x, widget_y
+        
+        pixmap_size = self.size()
+        img_h, img_w = self.image.shape[:2]
+        
+        # Calculate scale to fit (same as in paintEvent)
+        scale_x = pixmap_size.width() / img_w
+        scale_y = pixmap_size.height() / img_h
+        scale = min(scale_x, scale_y)
+        
+        scaled_w = img_w * scale
+        scaled_h = img_h * scale
+        x_offset = (pixmap_size.width() - scaled_w) / 2
+        y_offset = (pixmap_size.height() - scaled_h) / 2
+        
+        # Convert widget coordinates to image coordinates
+        img_x = (widget_x - x_offset) / scale
+        img_y = (widget_y - y_offset) / scale
+        
+        return img_x, img_y
+    
     def mousePressEvent(self, event):
         """Handle mouse press"""
         if event.button() == Qt.LeftButton:
@@ -163,12 +202,12 @@ class ImageWidget(QWidget):
             y = event.y()
             # Convert to image coordinates
             if self.image is not None:
-                pixmap_size = self.size()
+                img_x, img_y = self.widget_to_image_coords(x, y)
+                
+                # Clamp to image bounds
                 img_h, img_w = self.image.shape[:2]
-                scale_x = img_w / pixmap_size.width()
-                scale_y = img_h / pixmap_size.height()
-                img_x = x * scale_x
-                img_y = y * scale_y
+                img_x = max(0, min(img_w - 1, img_x))
+                img_y = max(0, min(img_h - 1, img_y))
                 
                 if self.selection_mode:
                     # In selection mode, emit click signal
@@ -184,14 +223,11 @@ class ImageWidget(QWidget):
         if self.dragged_point_idx is not None and self.image is not None:
             x = event.x()
             y = event.y()
-            pixmap_size = self.size()
-            img_h, img_w = self.image.shape[:2]
-            scale_x = img_w / pixmap_size.width()
-            scale_y = img_h / pixmap_size.height()
-            img_x = x * scale_x
-            img_y = y * scale_y
+            # Convert to image coordinates
+            img_x, img_y = self.widget_to_image_coords(x, y)
             
             # Clamp to image bounds
+            img_h, img_w = self.image.shape[:2]
             img_x = max(0, min(img_w - 1, img_x))
             img_y = max(0, min(img_h - 1, img_y))
             
@@ -234,19 +270,20 @@ class ImageWidget(QWidget):
         pixmap = QPixmap.fromImage(qimg).scaled(scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         painter.drawPixmap(x_offset, y_offset, pixmap)
         
-        # Draw corner points
+        # Draw corner points as crosses
         for point in self.points:
             x = int(x_offset + point.x * scale)
             y = int(y_offset + point.y * scale)
+            cross_size = point.radius * 2
             pen = QPen(QColor(*point.color), 2)
             painter.setPen(pen)
-            painter.setBrush(QColor(*point.color))
-            painter.drawEllipse(x - point.radius, y - point.radius, 
-                              point.radius * 2, point.radius * 2)
+            # Draw cross
+            painter.drawLine(x - cross_size, y, x + cross_size, y)
+            painter.drawLine(x, y - cross_size, x, y + cross_size)
             # Draw label
             painter.setPen(QColor(0, 0, 0))
             painter.setFont(QFont("Arial", 10, QFont.Bold))
-            painter.drawText(x + point.radius + 5, y - point.radius, point.label)
+            painter.drawText(x + cross_size + 5, y - cross_size, point.label)
         
         # Draw window center point
         if self.window_center is not None:
@@ -345,7 +382,7 @@ class MainWindow(QMainWindow):
         self.H_world_to_image = None
         self.image_widget.points = []
         self.image_widget.window_center = None
-        self.image_widget.selection_mode = True
+        self.image_widget.set_selection_mode(True)
         self.image_widget.set_image(self.image_rgb)
         self.update()
     
@@ -413,7 +450,7 @@ class MainWindow(QMainWindow):
         self.image_widget.set_points(all_points, colors, labels)
         
         # Automatically switch to drag mode and set up window
-        self.image_widget.selection_mode = False
+        self.image_widget.set_selection_mode(False)
         self.setup_window()
     
     def setup_window(self):
