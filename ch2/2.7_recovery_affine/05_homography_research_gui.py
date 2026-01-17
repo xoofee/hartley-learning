@@ -117,7 +117,67 @@ def find_invariant_points(H):
         return [], []
 
 
+def decompose_homography_my(H):
+
+    """
+    Hs = [sR t;
+         0 1]
+    Ha = [K 0;
+         0 1]
+    Hp = [I 0;
+          v^T u]
+    H = Hs * Ha * Hp
+      = [sR t;
+         0 1] * 
+         [K 0;
+         v^T  u]
+       = [sRK + tv^T  tu;
+           v^T  u]   
+
+    """
+
+    # H = H/H[2,2] if abs(H[2,2]) > 1e-12 else H
+    # already normalized before calling this function
+
+    v = H[2,0:2].T
+    t = H[:2, 2]
+    sRK = H[:2, :2] - t@v.T
+    s = np.sqrt(np.linalg.det(sRK))
+    RK = sRK/s
+    R, K = np.linalg.qr(RK)
+
+    # Signs of the diagonal of R
+    sign = np.sign(np.diag(K))
+    sign[sign == 0] = 1   # avoid zero
+
+    D = np.diag(sign)
+
+    K = K @ D
+    R = D @ R
+
+    Hs = np.eye(3)
+    Hs[:2, :2] = s*R
+    Hs[:2, 2] = t
+
+    Ha = np.eye(3)
+    Ha[:2, :2] = K
+
+    Hp = np.eye(3)
+    Hp[2, :2] = v
+    
+    return Hs, Ha, Hp
+
+
 def decompose_homography(H):
+
+    # print(f"=========== decompose_homography ===========")
+    # print(f"Decomposing homography: {H}")
+    # print(f"Decomposing homography my: {decompose_homography_my(H)}")
+    # print(f"Decomposing homography cursor: {decompose_homography_cursor(H)}")
+
+    return decompose_homography_my(H)
+
+def decompose_homography_cursor(H):
     """
     Decompose H into H = Hs * Ha * Hp
     where:
