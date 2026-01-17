@@ -28,7 +28,7 @@ import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QTextEdit, QPushButton, QMessageBox,
-                             QScrollArea, QGroupBox, QGridLayout, QLineEdit)
+                             QScrollArea, QGroupBox, QGridLayout, QLineEdit, QDoubleSpinBox)
 from PyQt5.QtCore import Qt, QPointF, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 
@@ -122,17 +122,19 @@ def decompose_homography(H):
     Decompose H into H = Hs * Ha * Hp
     where:
     - Hs: similarity transform [sR t; 0 1] with s > 0
-    - Ha: affine transform [K 0; 0 1] where K is upper triangular with positive diagonal
+    - Ha: affine transform [K 0; 0 1] where K is upper triangular, det(K) = 1, no translation
     - Hp: perspective transform [I 0; v^T w]
     
     Returns: (Hs, Ha, Hp)
     """
     try:
+        # Store original H for verification
+        H_original = H.copy()
+        
         # Normalize H
         H = H / H[2, 2] if abs(H[2, 2]) > 1e-12 else H
         
         # Extract perspective part: Hp = [I 0; v^T w]
-        # The last row of H gives us the perspective component
         v = H[2, :2].copy()
         w = H[2, 2]
         
@@ -148,8 +150,8 @@ def decompose_homography(H):
         # Normalize H_affine
         H_affine = H_affine / H_affine[2, 2] if abs(H_affine[2, 2]) > 1e-12 else H_affine
         
-        # Extract affine part: Ha = [K 0; 0 1]
-        # Use QR decomposition on the upper-left 2x2 block
+        # Extract affine part: Ha = [K 0; 0 1] where K is upper triangular, det(K) = 1
+        # We want: H_affine[:2, :2] = (s * R_rot) * K where K is upper triangular, det(K) = 1
         A = H_affine[:2, :2]
         Q, R = np.linalg.qr(A)
         
@@ -159,24 +161,38 @@ def decompose_homography(H):
                 R[i, :] *= -1
                 Q[:, i] *= -1
         
-        # Construct Ha
+        # Ensure Q is a proper rotation (det = 1), not a reflection
+        if np.linalg.det(Q) < 0:
+            Q[:, -1] *= -1
+            R[-1, :] *= -1
+        
+        # Normalize K so that det(K) = 1
+        # We have A = Q * R, and we want A = (s * R_rot) * K where det(K) = 1
+        # So: A = Q * R = (Q * sqrt(det(R))) * (R / sqrt(det(R)))
+        # So: A = (Q * sqrt(det(R))) * K where K = R / sqrt(det(R)) has det(K) = 1
+        
+        det_R = np.linalg.det(R)
+        if abs(det_R) > 1e-12:
+            # Scale factor: we want det(K) = 1, so K = R / sqrt(det(R))
+            scale_R = np.sqrt(abs(det_R))
+            # Normalize R: K = R / scale_R (so det(K) = 1)
+            K = R / scale_R
+            # Now A = Q * R = Q * scale_R * K = (Q * scale_R) * K
+            # Q is a rotation, so Q_scaled = Q * scale_R is a scaled rotation
+            Q_scaled = Q * scale_R
+        else:
+            K = R
+            Q_scaled = Q
+        
+        # Construct Ha with no translation part
         Ha = np.eye(3)
-        Ha[:2, :2] = R
-        Ha[:2, 2] = H_affine[:2, 2]
+        Ha[:2, :2] = K
+        Ha[:2, 2] = 0.0  # No translation part
         
-        # Extract similarity: Hs = H_affine * Ha^-1
-        Ha_inv = np.linalg.inv(Ha)
-        Hs = H_affine @ Ha_inv
-        
-        # Normalize Hs
-        Hs = Hs / Hs[2, 2] if abs(Hs[2, 2]) > 1e-12 else Hs
-        
-        # Extract scale and rotation from Hs
-        # Hs[:2, :2] = s * R, where R is rotation matrix
-        A_sim = Hs[:2, :2]
-        
-        # Use SVD to extract scale and rotation
-        U, S, Vt = np.linalg.svd(A_sim)
+        # Now we have: H_affine[:2, :2] = Q_scaled * K
+        # We need to decompose Q_scaled into s * R_rot (similarity part)
+        # Use SVD to extract scale and rotation from Q_scaled
+        U, S, Vt = np.linalg.svd(Q_scaled)
         
         # Scale is the geometric mean of singular values
         s = np.sqrt(S[0] * S[1])
@@ -184,21 +200,35 @@ def decompose_homography(H):
             s = 1.0
         
         # Rotation matrix
-        R_sim = U @ Vt
-        if np.linalg.det(R_sim) < 0:
+        R_rot = U @ Vt
+        if np.linalg.det(R_rot) < 0:
             U[:, -1] *= -1
-            R_sim = U @ Vt
+            R_rot = U @ Vt
         
-        # Reconstruct Hs with proper rotation and scale
-        # Hs[:2, 2] = t (translation from Hs)
-        # From Hs = H_affine * Ha^-1, we have:
-        # Hs[:2, 2] = H_affine[:2, 2] - s * R_sim @ Ha[:2, 2]
-        # But actually, since Ha[:2, 2] = H_affine[:2, 2], we need to solve:
-        # H_affine[:2, 2] = s * R_sim @ Ha[:2, 2] + t
-        # So: t = H_affine[:2, 2] - s * R_sim @ Ha[:2, 2]
+        # Construct Hs with proper rotation, scale, and translation
         Hs = np.eye(3)
-        Hs[:2, :2] = s * R_sim
-        Hs[:2, 2] = H_affine[:2, 2] - s * R_sim @ Ha[:2, 2]
+        Hs[:2, :2] = s * R_rot
+        Hs[:2, 2] = H_affine[:2, 2]  # Translation from H_affine goes to Hs
+        
+        # Verify decomposition: H_reconstructed = Hs * Ha * Hp should equal H_original
+        H_reconstructed = Hs @ Ha @ Hp
+        # Normalize both matrices for comparison
+        H_reconstructed = H_reconstructed / H_reconstructed[2, 2] if abs(H_reconstructed[2, 2]) > 1e-12 else H_reconstructed
+        H_original_normalized = H_original / H_original[2, 2] if abs(H_original[2, 2]) > 1e-12 else H_original
+        
+        # Compute difference
+        diff = np.abs(H_reconstructed - H_original_normalized)
+        max_diff = np.max(diff)
+        mean_diff = np.mean(diff)
+        
+        # Print warning only if difference is significant
+        if max_diff > 1e-6:
+            print(f"Warning: Decomposition verification failed!")
+            print(f"  Max difference: {max_diff:.2e}")
+            print(f"  Mean difference: {mean_diff:.2e}")
+            print(f"  H original:\n{H_original_normalized}")
+            print(f"  H reconstructed:\n{H_reconstructed}")
+            print(f"  Difference:\n{diff}")
         
         return Hs, Ha, Hp
     except Exception as e:
@@ -218,6 +248,34 @@ def compose_homography(Hs, Ha, Hp):
         return H
     except:
         return np.eye(3)
+
+
+def calculate_decomposition_error(H, Hs, Ha, Hp):
+    """
+    Calculate the maximum absolute error between H and Hs*Ha*Hp.
+    
+    Args:
+        H: Original homography matrix (3x3)
+        Hs, Ha, Hp: Decomposed matrices (3x3 each)
+    
+    Returns:
+        max_error: Maximum absolute error
+    """
+    try:
+        # Compose H_reconstructed = Hs * Ha * Hp
+        H_reconstructed = compose_homography(Hs, Ha, Hp)
+        
+        # Normalize both matrices for comparison
+        H_normalized = H / H[2, 2] if abs(H[2, 2]) > 1e-12 else H
+        H_reconstructed_normalized = H_reconstructed / H_reconstructed[2, 2] if abs(H_reconstructed[2, 2]) > 1e-12 else H_reconstructed
+        
+        # Calculate absolute difference
+        diff = np.abs(H_normalized - H_reconstructed_normalized)
+        max_error = np.max(diff)
+        
+        return max_error
+    except:
+        return float('inf')
 
 
 def generate_grid_image(width=800, height=600, grid_spacing=50):
@@ -295,14 +353,22 @@ class ImageWidget(QWidget):
         if event.button() == Qt.LeftButton:
             x = event.x()
             y = event.y()
-            # Convert to image coordinates
+            # Convert to image coordinates (matching paintEvent coordinate system)
             if self.image is not None:
                 pixmap_size = self.size()
                 img_h, img_w = self.image.shape[:2]
-                scale_x = img_w / pixmap_size.width()
-                scale_y = img_h / pixmap_size.height()
-                img_x = x * scale_x
-                img_y = y * scale_y
+                scale_x = pixmap_size.width() / img_w
+                scale_y = pixmap_size.height() / img_h
+                scale = min(scale_x, scale_y)
+                
+                scaled_w = int(img_w * scale)
+                scaled_h = int(img_h * scale)
+                x_offset = (pixmap_size.width() - scaled_w) // 2
+                y_offset = (pixmap_size.height() - scaled_h) // 2
+                
+                # Convert widget coordinates to image coordinates
+                img_x = (x - x_offset) / scale
+                img_y = (y - y_offset) / scale
                 
                 if self.selection_mode:
                     # In selection mode, emit click signal
@@ -320,12 +386,21 @@ class ImageWidget(QWidget):
         if self.dragged_point_idx is not None and self.image is not None:
             x = event.x()
             y = event.y()
+            # Convert to image coordinates (matching paintEvent coordinate system)
             pixmap_size = self.size()
             img_h, img_w = self.image.shape[:2]
-            scale_x = img_w / pixmap_size.width()
-            scale_y = img_h / pixmap_size.height()
-            img_x = x * scale_x
-            img_y = y * scale_y
+            scale_x = pixmap_size.width() / img_w
+            scale_y = pixmap_size.height() / img_h
+            scale = min(scale_x, scale_y)
+            
+            scaled_w = int(img_w * scale)
+            scaled_h = int(img_h * scale)
+            x_offset = (pixmap_size.width() - scaled_w) // 2
+            y_offset = (pixmap_size.height() - scaled_h) // 2
+            
+            # Convert widget coordinates to image coordinates
+            img_x = (x - x_offset) / scale
+            img_y = (y - y_offset) / scale
             
             # Clamp to image bounds
             img_x = max(0, min(img_w - 1, img_x))
@@ -468,6 +543,170 @@ class MatrixEditWidget(QWidget):
             pass  # Invalid input, ignore
 
 
+class ScaleRotationEditWidget(QWidget):
+    """Widget for editing scale s and rotation angle theta (in degrees)"""
+    scale_rotation_changed = pyqtSignal(float, float)  # s, theta_degrees
+    
+    def __init__(self):
+        super().__init__()
+        self.s = 1.0
+        self.theta_degrees = 0.0
+        self.text_edits = []  # For s (QLineEdit)
+        self.theta_spin = None  # For theta (QDoubleSpinBox)
+        self.updating = False
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout()
+        title = QLabel("Similarity Parameters (s, θ)")
+        title.setFont(QFont("Arial", 10, QFont.Bold))
+        layout.addWidget(title)
+        
+        grid = QGridLayout()
+        
+        # Scale s
+        label_s = QLabel("Scale s:")
+        edit_s = QLineEdit()
+        edit_s.setMaximumWidth(100)
+        edit_s.textChanged.connect(self.on_text_changed)
+        grid.addWidget(label_s, 0, 0)
+        grid.addWidget(edit_s, 0, 1)
+        self.text_edits.append(edit_s)
+        
+        # Rotation angle theta (degrees) - use spin box
+        label_theta = QLabel("Angle θ (deg):")
+        spin_theta = QDoubleSpinBox()
+        spin_theta.setMaximumWidth(100)
+        spin_theta.setRange(-360.0, 360.0)  # Allow full rotation range
+        spin_theta.setSingleStep(1.0)  # Increment/decrement by 1 degree
+        spin_theta.setDecimals(1)  # Show 1 decimal place
+        spin_theta.valueChanged.connect(self.on_theta_changed)
+        grid.addWidget(label_theta, 1, 0)
+        grid.addWidget(spin_theta, 1, 1)
+        self.theta_spin = spin_theta
+        
+        layout.addLayout(grid)
+        self.setLayout(layout)
+    
+    def set_scale_rotation(self, s, theta_degrees):
+        """Set the scale and rotation angle (called from external source)"""
+        self.updating = True
+        self.s = s
+        self.theta_degrees = theta_degrees
+        
+        # Update s (QLineEdit) - only if value changed
+        current_s_text = self.text_edits[0].text()
+        try:
+            current_s = float(current_s_text) if current_s_text else None
+            if current_s is None or abs(current_s - s) > 1e-6:
+                # Value changed or invalid, update with formatting
+                self.text_edits[0].setText(f"{s:.6f}")
+        except ValueError:
+            # Invalid text, update with formatting
+            self.text_edits[0].setText(f"{s:.6f}")
+        
+        # Update theta (QDoubleSpinBox) - only if value changed
+        if abs(self.theta_spin.value() - theta_degrees) > 1e-6:
+            self.theta_spin.setValue(theta_degrees)
+        
+        self.updating = False
+    
+    def on_text_changed(self):
+        """Handle text change for s (real-time updates as user types)"""
+        if self.updating:
+            return
+        
+        try:
+            new_s = float(self.text_edits[0].text())
+            # Only emit if value actually changed (to avoid infinite loops)
+            if abs(new_s - self.s) > 1e-6:
+                self.s = new_s
+                theta = self.theta_spin.value()
+                self.scale_rotation_changed.emit(new_s, theta)
+        except ValueError:
+            # Invalid input while typing - don't do anything, let user continue typing
+            pass
+    
+    def on_theta_changed(self, value):
+        """Handle theta spin box value change"""
+        if self.updating:
+            return
+        
+        # Only emit if value actually changed
+        if abs(value - self.theta_degrees) > 1e-6:
+            self.theta_degrees = value
+            try:
+                s = float(self.text_edits[0].text())
+                self.scale_rotation_changed.emit(s, value)
+            except ValueError:
+                # If s is invalid, still emit with current s value
+                self.scale_rotation_changed.emit(self.s, value)
+
+
+def extract_scale_rotation_from_Hs(Hs):
+    """
+    Extract scale s and rotation angle theta (in degrees) from Hs.
+    Hs[:2, :2] = s * R where R is a rotation matrix.
+    
+    Returns: (s, theta_degrees)
+    """
+    try:
+        A = Hs[:2, :2]
+        # Use SVD to extract scale and rotation
+        U, S, Vt = np.linalg.svd(A)
+        
+        # Scale is the geometric mean of singular values
+        s = np.sqrt(S[0] * S[1])
+        if s < 1e-10:
+            s = 1.0
+        
+        # Rotation matrix
+        R = U @ Vt
+        if np.linalg.det(R) < 0:
+            U[:, -1] *= -1
+            R = U @ Vt
+        
+        # Extract angle from rotation matrix
+        # R = [[cos(θ), -sin(θ)], [sin(θ), cos(θ)]]
+        theta_radians = np.arctan2(R[1, 0], R[0, 0])
+        theta_degrees = np.degrees(theta_radians)
+        
+        return s, theta_degrees
+    except:
+        return 1.0, 0.0
+
+
+def construct_Hs_from_scale_rotation(s, theta_degrees, translation):
+    """
+    Construct Hs from scale s, rotation angle theta (in degrees), and translation.
+    Hs = [s*R t; 0 1] where R is a rotation matrix.
+    
+    Args:
+        s: scale factor
+        theta_degrees: rotation angle in degrees
+        translation: (tx, ty) translation vector
+    
+    Returns:
+        Hs: (3, 3) similarity transformation matrix
+    """
+    theta_radians = np.radians(theta_degrees)
+    cos_theta = np.cos(theta_radians)
+    sin_theta = np.sin(theta_radians)
+    
+    # Rotation matrix
+    R = np.array([
+        [cos_theta, -sin_theta],
+        [sin_theta, cos_theta]
+    ])
+    
+    # Construct Hs
+    Hs = np.eye(3)
+    Hs[:2, :2] = s * R
+    Hs[:2, 2] = translation
+    
+    return Hs
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -480,6 +719,12 @@ class MainWindow(QMainWindow):
         self.Hp = np.eye(3)
         self.invariant_points = []
         self.point_selection_mode = True  # True: selecting points, False: dragging mode
+        
+        # Store initial state for reset
+        self.initial_src_points = []
+        self.initial_dst_points = []
+        self.initial_point_selection_mode = True
+        
         self.init_ui()
         self.load_image()
         self.image_widget.selection_mode = True
@@ -500,15 +745,25 @@ class MainWindow(QMainWindow):
         self.image_widget.point_clicked.connect(self.on_image_click)
         left_layout.addWidget(self.image_widget)
         
-        # Mode button
-        self.mode_button = QPushButton("Switch to Dragging Mode")
-        self.mode_button.clicked.connect(self.toggle_mode)
-        left_layout.addWidget(self.mode_button)
+        # Reset button
+        button_layout = QHBoxLayout()
+        self.reset_button = QPushButton("Reset to Initial State")
+        self.reset_button.clicked.connect(self.reset_to_initial_state)
+        button_layout.addWidget(self.reset_button)
+        left_layout.addLayout(button_layout)
         
         main_layout.addLayout(left_layout, 2)
         
         # Right side: Controls and matrices
         right_layout = QVBoxLayout()
+        
+        # Decomposition error display
+        error_group = QGroupBox("Decomposition Error (H - Hs * Ha * Hp)")
+        error_layout = QVBoxLayout()
+        self.error_label = QLabel("Max Error: N/A")
+        error_layout.addWidget(self.error_label)
+        error_group.setLayout(error_layout)
+        right_layout.addWidget(error_group)
         
         # Matrix editors
         scroll = QScrollArea()
@@ -518,6 +773,11 @@ class MainWindow(QMainWindow):
         self.H_editor = MatrixEditWidget("Homography H")
         self.H_editor.matrix_changed.connect(self.on_H_changed)
         scroll_layout.addWidget(self.H_editor)
+        
+        # Scale and rotation editor for Hs
+        self.scale_rotation_editor = ScaleRotationEditWidget()
+        self.scale_rotation_editor.scale_rotation_changed.connect(self.on_scale_rotation_changed)
+        scroll_layout.addWidget(self.scale_rotation_editor)
         
         self.Hs_editor = MatrixEditWidget("Similarity Hs")
         self.Hs_editor.matrix_changed.connect(self.on_Hs_changed)
@@ -545,15 +805,6 @@ class MainWindow(QMainWindow):
         self.image = generate_grid_image(width=800, height=600, grid_spacing=50)
         self.image_rgb = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
         self.image_widget.set_image(self.image_rgb)
-    
-    def toggle_mode(self):
-        """Toggle between point selection and dragging mode"""
-        self.point_selection_mode = not self.point_selection_mode
-        self.image_widget.selection_mode = self.point_selection_mode
-        if self.point_selection_mode:
-            self.mode_button.setText("Switch to Dragging Mode")
-        else:
-            self.mode_button.setText("Switch to Selection Mode")
     
     def on_image_click(self, img_x, img_y):
         """Handle image click for point selection"""
@@ -583,9 +834,9 @@ class MainWindow(QMainWindow):
             self.image_widget.set_points(all_points, colors, labels)
         
         if len(self.src_points) == 4 and len(self.dst_points) == 4:
+            # Auto-switch to drag mode after 8 points are selected
             self.point_selection_mode = False
             self.image_widget.selection_mode = False
-            self.mode_button.setText("Switch to Selection Mode")
             self.update_all()
     
     def on_point_moved(self, point_idx, x, y):
@@ -606,6 +857,10 @@ class MainWindow(QMainWindow):
             
             # Update decomposition
             self.Hs, self.Ha, self.Hp = decompose_homography(self.H)
+            
+            # Calculate and display decomposition error
+            max_error = calculate_decomposition_error(self.H, self.Hs, self.Ha, self.Hp)
+            self.error_label.setText(f"Max Error: {max_error:.2e}")
             
             # Update invariant points
             self.invariant_points, _ = find_invariant_points(self.H)
@@ -630,6 +885,12 @@ class MainWindow(QMainWindow):
             self.H_editor.set_matrix(self.H)
             self.H_editor.updating = False
             
+            # Update Hs editor and scale/rotation widget
+            s, theta_degrees = extract_scale_rotation_from_Hs(self.Hs)
+            self.scale_rotation_editor.updating = True
+            self.scale_rotation_editor.set_scale_rotation(s, theta_degrees)
+            self.scale_rotation_editor.updating = False
+            
             self.Hs_editor.updating = True
             self.Hs_editor.set_matrix(self.Hs)
             self.Hs_editor.updating = False
@@ -649,6 +910,11 @@ class MainWindow(QMainWindow):
         self.H = H
         # Update decomposition
         self.Hs, self.Ha, self.Hp = decompose_homography(self.H)
+        
+        # Calculate and display decomposition error
+        max_error = calculate_decomposition_error(self.H, self.Hs, self.Ha, self.Hp)
+        self.error_label.setText(f"Max Error: {max_error:.2e}")
+        
         # Update invariant points
         self.invariant_points, _ = find_invariant_points(self.H)
         # Update transformed image
@@ -667,6 +933,11 @@ class MainWindow(QMainWindow):
             labels = [f"S{i+1}" for i in range(4)] + [f"D{i+1}" for i in range(4)]
             self.image_widget.set_points(all_points, colors, labels)
         # Update other matrix editors
+        s, theta_degrees = extract_scale_rotation_from_Hs(self.Hs)
+        self.scale_rotation_editor.updating = True
+        self.scale_rotation_editor.set_scale_rotation(s, theta_degrees)
+        self.scale_rotation_editor.updating = False
+        
         self.Hs_editor.updating = True
         self.Hs_editor.set_matrix(self.Hs)
         self.Hs_editor.updating = False
@@ -677,11 +948,32 @@ class MainWindow(QMainWindow):
         self.Hp_editor.set_matrix(self.Hp)
         self.Hp_editor.updating = False
     
+    def on_scale_rotation_changed(self, s, theta_degrees):
+        """Handle scale and rotation change"""
+        if self.scale_rotation_editor.updating:
+            return
+        # Get current translation from Hs
+        translation = self.Hs[:2, 2].copy()
+        # Construct new Hs from s, theta, and translation
+        self.Hs = construct_Hs_from_scale_rotation(s, theta_degrees, translation)
+        # Update Hs editor without triggering callback
+        self.Hs_editor.updating = True
+        self.Hs_editor.set_matrix(self.Hs)
+        self.Hs_editor.updating = False
+        # Update everything from decomposition
+        self.update_from_decomposition()
+    
     def on_Hs_changed(self, Hs):
         """Handle Hs matrix edit"""
         if self.Hs_editor.updating:
             return
         self.Hs = Hs
+        # Update scale/rotation widget
+        s, theta_degrees = extract_scale_rotation_from_Hs(self.Hs)
+        self.scale_rotation_editor.updating = True
+        self.scale_rotation_editor.set_scale_rotation(s, theta_degrees)
+        self.scale_rotation_editor.updating = False
+        # Update everything from decomposition
         self.update_from_decomposition()
     
     def on_Ha_changed(self, Ha):
@@ -701,6 +993,11 @@ class MainWindow(QMainWindow):
     def update_from_decomposition(self):
         """Update H and everything from Hs, Ha, Hp"""
         self.H = compose_homography(self.Hs, self.Ha, self.Hp)
+        
+        # Calculate and display decomposition error
+        max_error = calculate_decomposition_error(self.H, self.Hs, self.Ha, self.Hp)
+        self.error_label.setText(f"Max Error: {max_error:.2e}")
+        
         # Update invariant points
         self.invariant_points, _ = find_invariant_points(self.H)
         # Update transformed image
@@ -722,6 +1019,62 @@ class MainWindow(QMainWindow):
         self.H_editor.updating = True
         self.H_editor.set_matrix(self.H)
         self.H_editor.updating = False
+        
+        # Update scale/rotation widget (Hs may have changed)
+        s, theta_degrees = extract_scale_rotation_from_Hs(self.Hs)
+        self.scale_rotation_editor.updating = True
+        self.scale_rotation_editor.set_scale_rotation(s, theta_degrees)
+        self.scale_rotation_editor.updating = False
+    
+    def reset_to_initial_state(self):
+        """Reset the widget to its initial state"""
+        # Reset points
+        self.src_points = []
+        self.dst_points = []
+        
+        # Reset point selection mode
+        self.point_selection_mode = self.initial_point_selection_mode
+        self.image_widget.selection_mode = self.initial_point_selection_mode
+        
+        # Reset matrices to identity
+        self.H = np.eye(3)
+        self.Hs = np.eye(3)
+        self.Ha = np.eye(3)
+        self.Hp = np.eye(3)
+        self.invariant_points = []
+        
+        # Clear points display
+        self.image_widget.set_points([], [], [])
+        self.image_widget.set_invariant_points([])
+        
+        # Clear transformed image
+        self.image_widget.set_transformed_image(None)
+        
+        # Reset error display
+        self.error_label.setText("Max Error: N/A")
+        
+        # Update matrix editors
+        self.H_editor.updating = True
+        self.H_editor.set_matrix(self.H)
+        self.H_editor.updating = False
+        
+        self.Hs_editor.updating = True
+        self.Hs_editor.set_matrix(self.Hs)
+        self.Hs_editor.updating = False
+        
+        self.Ha_editor.updating = True
+        self.Ha_editor.set_matrix(self.Ha)
+        self.Ha_editor.updating = False
+        
+        self.Hp_editor.updating = True
+        self.Hp_editor.set_matrix(self.Hp)
+        self.Hp_editor.updating = False
+        
+        # Update scale/rotation widget
+        s, theta_degrees = extract_scale_rotation_from_Hs(self.Hs)
+        self.scale_rotation_editor.updating = True
+        self.scale_rotation_editor.set_scale_rotation(s, theta_degrees)
+        self.scale_rotation_editor.updating = False
 
 
 def main():
