@@ -85,9 +85,6 @@ def find_homography_normalized(src_points, dst_points):
 
     return H
 
-
-
-
 def findHomography(src_points, dst_points):
     print(f"src_points: {src_points}")
     print(f"dst_points: {dst_points}")
