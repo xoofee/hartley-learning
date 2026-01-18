@@ -378,6 +378,12 @@ def main():
     
     plt.tight_layout()
     plt.show()
+
+    plt.figure()
+    plt.imshow(transformed_image)
+    plt.title('Affine Recovered Image')
+    plt.axis('off')
+    plt.show()
     
     print("\nDone! Close the matplotlib window to exit.")
 

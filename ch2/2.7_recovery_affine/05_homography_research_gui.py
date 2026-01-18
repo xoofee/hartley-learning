@@ -117,6 +117,106 @@ def find_invariant_points(H):
         return [], []
 
 
+
+def decompose_homography_my2(H):
+    """
+    Decompose H into H = Hs * Ha * Hp
+    where:
+    - Hs: similarity transform [sR t; 0 1] with s > 0
+    - Ha: affine transform [K 0; 0 1] where K is upper triangular, det(K) = 1
+    - Hp: perspective transform [I 0; v^T w]
+    
+    Mathematical formulation:
+    H = Hs * Ha * Hp
+      = [sR t; 0 1] * [K 0; 0 1] * [I 0; v^T w]
+      = [sRK + tv^T  tu; v^T w]
+    
+    Returns: (Hs, Ha, Hp)
+    """
+    try:
+        # Normalize H to avoid numerical issues
+        if abs(H[2, 2]) > 1e-12:
+            H = H / H[2, 2]
+        
+        # Extract perspective part: Hp = [I 0; v^T w]
+        v = H[2, :2].copy()
+        w = H[2, 2]
+        
+        # Construct Hp with proper normalization
+        Hp = np.eye(3)
+        Hp[2, :2] = v
+        Hp[2, 2] = w
+        
+        # Remove perspective: H_affine = H * Hp^-1 = Hs * Ha
+        Hp_inv = np.linalg.inv(Hp)
+        H_affine = H @ Hp_inv
+        
+        # Normalize H_affine
+        if abs(H_affine[2, 2]) > 1e-12:
+            H_affine = H_affine / H_affine[2, 2]
+        
+        # Extract translation and affine part
+        t = H_affine[:2, 2]
+        A = H_affine[:2, :2]
+        
+        # Decompose A = sRK where we want to separate into (sR) and K
+        # First, extract scale from determinant
+        det_A = np.linalg.det(A)
+        if abs(det_A) < 1e-12:
+            # Degenerate case: use identity
+            s = 1.0
+            R = np.eye(2)
+            K = np.eye(2)
+        else:
+            # Ensure positive determinant for scale extraction
+            s = np.sqrt(abs(det_A))
+            if s < 1e-10:
+                s = 1.0
+            
+            # Normalize A to have unit determinant: RK = A / s
+            RK = A / s
+            
+            # QR decomposition: RK = R * K where R is orthogonal, K is upper triangular
+            R, K = np.linalg.qr(RK)
+            
+            # Ensure positive diagonal for K (upper triangular should have positive diagonal)
+            # for i in range(2):
+            #     if K[i, i] < 0:
+            #         K[i, :] *= -1
+            #         R[:, i] *= -1
+            
+            # Ensure R is a proper rotation (det = 1), not a reflection
+            # if np.linalg.det(R) < 0:
+            #     R[:, -1] *= -1
+            #     K[-1, :] *= -1
+            
+            # Normalize K to have det(K) = 1
+            # det_K = np.linalg.det(K)
+            # if abs(det_K) > 1e-12:
+            #     scale_K = np.sqrt(abs(det_K))
+            #     K = K / scale_K
+            #     # Adjust scale: s_new = s * scale_K
+            #     s = s * scale_K
+        
+        # Construct Ha: [K 0; 0 1] with no translation
+        Ha = np.eye(3)
+        Ha[:2, :2] = K
+        Ha[:2, 2] = 0.0  # Explicitly set translation to zero
+        
+        # Construct Hs: [sR t; 0 1]
+        Hs = np.eye(3)
+        Hs[:2, :2] = s * R
+        Hs[:2, 2] = t
+        
+        return Hs, Ha, Hp
+    
+    except Exception as e:
+        print(f"Error in decompose_homography_my2: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return identity matrices on error
+        return np.eye(3), np.eye(3), np.eye(3)
+
 def decompose_homography_my(H):
 
     """
@@ -175,7 +275,9 @@ def decompose_homography(H):
     # print(f"Decomposing homography my: {decompose_homography_my(H)}")
     # print(f"Decomposing homography cursor: {decompose_homography_cursor(H)}")
 
-    return decompose_homography_my(H)
+    # return decompose_homography_my(H)
+    # return decompose_homography_cursor(H)
+    return decompose_homography_my2(H)
 
 def decompose_homography_cursor(H):
     """
