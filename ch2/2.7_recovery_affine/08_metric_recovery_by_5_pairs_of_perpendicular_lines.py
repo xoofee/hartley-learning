@@ -334,7 +334,7 @@ def decompose_KKT_to_K(KKT):
         # Cholesky decomposition: KKT = L * L^T where L is lower triangular
         # To get upper triangular K, we set K = L^T
         L = np.linalg.cholesky(KKT)
-        # K = L.T  # Transpose to get upper triangular
+        # K = L.T  # Transpose to get upper triangular: ERROR!!!!! L.T@L != KKT!!!!
         K = L  # Transpose to get upper triangular
         return K
     except np.linalg.LinAlgError:
