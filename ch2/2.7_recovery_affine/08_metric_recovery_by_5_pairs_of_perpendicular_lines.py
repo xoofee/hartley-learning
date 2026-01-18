@@ -62,6 +62,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import json
 
 
 import matplotlib
@@ -316,6 +317,45 @@ def extract_v_from_C(C):
     return v, KKT
 
 def decompose_KKT_to_K(KKT):
+    return decompose_KKT_to_K_numpy(KKT)
+    # return decompose_KKT_to_K_manual(KKT)
+
+def decompose_KKT_to_K_manual(KKT):
+    """manual implementation of decompose with upper triangular K
+    let KKT = [r s; s t]
+    K = [a b;    K^T = [a 0;
+         0 c]           b c]
+    KKT = K * K^T = [a^2 + b^2    bc;
+                     bc          c^2]
+    
+    solve a b c
+    c = sqrt(t)
+    b = s / c
+    a = sqrt(r - b^2)
+    
+    """
+
+    # check conditions
+    if KKT[1,1] < 0:
+        raise ValueError("KKT is not positive definite")
+
+    c = np.sqrt(KKT[1,1])
+    b = KKT[0,1] / c
+
+    if b**2 > KKT[0,0]:
+        raise ValueError("KKT is not positive definite")
+
+    a = np.sqrt(KKT[0,0] - b**2)
+
+    K = np.array([[a, b], [0, c]])
+
+    # validate KKT
+    assert np.allclose(KKT, K@K.T, atol=1e-6)
+
+    return K
+
+
+def decompose_KKT_to_K_numpy(KKT):
     """
     Decompose KKT = K * K^T where K is a 2x2 upper triangular matrix.
     This is done using Cholesky decomposition.
@@ -343,7 +383,8 @@ def decompose_KKT_to_K(KKT):
         KKT_reg = KKT + np.eye(2) * 1e-6
         try:
             L = np.linalg.cholesky(KKT_reg)
-            K = L.T  # Transpose to get upper triangular
+            # K = L.T  # Transpose to get upper triangular
+            K = L
             return K
         except np.linalg.LinAlgError:
             # If still fails, use SVD-based approach and make K upper triangular
@@ -387,6 +428,59 @@ def construct_homography_from_K_and_v(K, v):
     
     return H
 
+def save_points_to_json(points, json_path):
+    """
+    Save points to JSON file.
+    
+    Args:
+        points: numpy array of shape (20, 2) containing the 20 points
+        json_path: path to the JSON file
+    """
+    # Convert numpy array to list of lists
+    points_list = points.tolist()
+    
+    data = {
+        'points': points_list,
+        'num_points': len(points_list)
+    }
+    
+    with open(json_path, 'w') as f:
+        json.dump(data, f, indent=2)
+    
+    print(f"Points saved to {json_path}")
+
+def load_points_from_json(json_path):
+    """
+    Load points from JSON file.
+    
+    Args:
+        json_path: path to the JSON file
+    
+    Returns:
+        numpy array of shape (20, 2) containing the 20 points, or None if loading fails
+    """
+    try:
+        if not os.path.exists(json_path):
+            return None
+        
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+        
+        points_list = data.get('points', [])
+        num_points = data.get('num_points', len(points_list))
+        
+        if num_points != 20 or len(points_list) != 20:
+            print(f"Warning: Expected 20 points, got {num_points}")
+            return None
+        
+        points = np.array(points_list, dtype=np.float32)
+        print(f"Points loaded from {json_path}")
+        return points
+    
+    except Exception as e:
+        print(f"Error loading points from {json_path}: {e}")
+        return None
+
 def main():
     # 1. Load the building image
     image_path = r'ch2\2.3_projective_transform\building.jpg'
@@ -407,12 +501,31 @@ def main():
     
     print(f"Image loaded: {image.shape}")
     
-    # 2. Let user click 20 points (A1, B1, C1, D1, A2, B2, C2, D2, A3, B3, C3, D3, A4, B4, C4, D4, A5, B5, C5, D5)
-    points = select_points(image)
+    # 2. Try to load cached points, otherwise let user click 20 points
+    json_path = r'ch2\2.7_recovery_affine\08_metric_recovery_by_5_pairs_of_perpendicular_lines.points.json'
     
-    if len(points) != 20:
-        print("Error: Need exactly 20 points")
-        return
+    # Try different possible paths for JSON file
+    if not os.path.exists(json_path):
+        json_path = os.path.join('ch2', '2.7_recovery_affine', '08_metric_recovery_by_5_pairs_of_perpendicular_lines.points.json')
+    
+    points = load_points_from_json(json_path)
+    
+    if points is None:
+        # No cached points, let user click
+        print("No cached points found. Please click 20 points...")
+        points = select_points(image)
+        
+        if len(points) != 20:
+            print("Error: Need exactly 20 points")
+            return
+        
+        # Save points to cache
+        save_points_to_json(points, json_path)
+    else:
+        print(f"Using cached points from {json_path}")
+        if len(points) != 20:
+            print("Error: Cached points do not have exactly 20 points")
+            return
     
     # 3. Get lines for each pair
     line_pairs = []
@@ -454,6 +567,7 @@ def main():
     
     # 8. Transform the image using H (from world to image, so we use H directly, not H^-1)
     h, w = image.shape[:2]
+    # transformed_image = cv2.warpPerspective(image, np.diag([0.6, 0.6, 1]) @ np.linalg.inv(H), (w, h))
     transformed_image = cv2.warpPerspective(image, np.linalg.inv(H), (w, h))
     
     # 9. Draw line segments and points on original image for visualization
