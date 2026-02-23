@@ -27,6 +27,18 @@ note: we do not use any opengl or maya or blender or any 3d software to generate
 
 do not remove this comment.
 
+coordinate:
+
+    (into the scene)
+   Z (forward)
+  /
+ /
+o --------→ X (right)
+|
+|
+↓
+Y (down)
+
 """
 
 from __future__ import annotations
@@ -114,20 +126,21 @@ def camera_pose_from_target(
     roll: float = 0.0,
     world_up: np.ndarray | None = None,
 ) -> np.ndarray:
-    """R_cam 3x3: columns are camera x, y, z axes in world. z points from camera toward target. roll (rad) rotates around view axis."""
+    """R_cam 3x3: columns are camera x, y, z axes in world. Camera frame: x=right, y=down, z=forward (view direction). roll (rad) rotates around view axis."""
     if world_up is None:
         world_up = np.array([0.0, 0.0, 1.0])
     d = target - camera_center_world
     d = d / (np.linalg.norm(d) + 1e-12)
-    cam_z = d
-    right0 = np.cross(world_up, cam_z)
+    forward = d  # cam z
+    right0 = np.cross(world_up, forward)
     right0 = right0 / (np.linalg.norm(right0) + 1e-12)
-    up0 = np.cross(cam_z, right0)
+    up0 = np.cross(forward, right0)
     up0 = up0 / (np.linalg.norm(up0) + 1e-12)
+    down0 = -up0
     cr, sr = np.cos(roll), np.sin(roll)
     right = cr * right0 - sr * up0
-    up = sr * right0 + cr * up0
-    R_cam = np.column_stack([right, up, cam_z])
+    down = sr * right0 + cr * down0
+    R_cam = np.column_stack([right, down, forward])
     return R_cam
 
 
@@ -162,9 +175,9 @@ def decompose_P(P: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def rotation_to_angles(R_world_to_cam: np.ndarray) -> tuple[float, float, float]:
-    """Extract azimuth, elevation, roll (radians) from R_world_to_cam. Camera axes in world = R_world_to_cam.T."""
+    """Extract azimuth, elevation, roll (radians) from R_world_to_cam. Camera frame: x=right, y=down, z=forward."""
     R_cam = R_world_to_cam.T
-    view = R_cam[:, 2]  # view direction in world
+    view = R_cam[:, 2]  # forward in world
     az = np.arctan2(view[1], view[0])
     el = np.arcsin(np.clip(view[2], -1.0, 1.0))
     world_up = np.array([0.0, 0.0, 1.0])
@@ -174,9 +187,10 @@ def rotation_to_angles(R_world_to_cam: np.ndarray) -> tuple[float, float, float]
         roll = 0.0
     else:
         right0 = right0 / n
-        up0 = np.cross(view, right0)
+        down0 = -np.cross(view, right0)
+        down0 = down0 / (np.linalg.norm(down0) + 1e-12)
         right = R_cam[:, 0]
-        roll = np.arctan2(np.dot(up0, right), np.dot(right0, right))
+        roll = np.arctan2(np.dot(down0, right), np.dot(right0, right))
     return az, el, roll
 
 
@@ -271,6 +285,7 @@ def draw_projected_scene(
     ax.set_xlim(0, img_width)
     ax.set_ylim(img_height, 0)
     ax.set_aspect("equal")
+    
     # Draw filled polygons
     from matplotlib.patches import Polygon
     poly_sq = Polygon(sq_uv, facecolor="green", edgecolor="darkgreen", alpha=0.8)
