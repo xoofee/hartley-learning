@@ -214,7 +214,7 @@ def draw_line(image, line, color=(0, 0, 255), thickness=2):
 
 def main():
     # 1. Load the building.jpg image
-    image_path = r'ch2\01_2.3_projective_transform\building.jpg'
+    image_path = r'ch2_2d_homography\01_2.3_projective_transform\building.jpg'
     image = cv2.imread(image_path)
     
     if image is None:

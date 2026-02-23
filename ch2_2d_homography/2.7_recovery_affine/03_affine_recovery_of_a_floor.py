@@ -220,7 +220,7 @@ def draw_line_on_image(image, line, color=(0, 0, 255), thickness=2):
 
 def main():
     # 1. Load the floor.jpg image
-    image_path = r'ch2\2.7_recovery_affine\floor.jpg'
+    image_path = r'ch2_2d_homography\2.7_recovery_affine\floor.jpg'
     
     # Try different possible paths
     if not os.path.exists(image_path):

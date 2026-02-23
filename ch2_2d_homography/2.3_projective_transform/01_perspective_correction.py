@@ -196,7 +196,7 @@ def calculate_destination_points(src_points):
 
 def main():
     # 1. Load the building.jpg image
-    image_path = r'ch2\2.3_projective_transform\building.jpg'
+    image_path = r'ch2_2d_homography\2.3_projective_transform\building.jpg'
     image = cv2.imread(image_path)
     
     if image is None:

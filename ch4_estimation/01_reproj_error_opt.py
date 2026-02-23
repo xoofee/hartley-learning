@@ -200,67 +200,52 @@ def find_chessboard_corners_auto(
 
 
 # ---------------------------------------------------------------------------
-# Point normalization (Hartley)
-# ---------------------------------------------------------------------------
-
-def normalize_points(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Hartley normalization for 2D points.
-    points: (N, 2)
-    Returns:
-        points_norm: (N, 2)
-        T: (3, 3) normalization matrix
-    """
-    centroid = np.mean(points, axis=0)
-    shifted = points - centroid
-    mean_dist = np.mean(np.sqrt(np.sum(shifted ** 2, axis=1)))
-    scale = np.sqrt(2) / (mean_dist + 1e-12)
-    T = np.array([
-        [scale, 0, -scale * centroid[0]],
-        [0, scale, -scale * centroid[1]],
-        [0, 0, 1],
-    ])
-    pts_h = np.hstack([points, np.ones((points.shape[0], 1))])
-    pts_norm = (T @ pts_h.T).T
-    return pts_norm[:, :2], T
-
-
-# ---------------------------------------------------------------------------
 # DLT homography
 # ---------------------------------------------------------------------------
 
-def _build_dlt_matrix(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+def build_dlt_matrix(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
     """Build design matrix A such that A h = 0 (h = vec(H)). src, dst: (N, 2)."""
     n = src.shape[0]
     A = np.zeros((2 * n, 9))
+
     for i in range(n):
         x, y = src[i, 0], src[i, 1]
         u, v = dst[i, 0], dst[i, 1]
-        A[2 * i] = [x, y, 1, 0, 0, 0, -u * x, -u * y, -u]
-        A[2 * i + 1] = [0, 0, 0, x, y, 1, -v * x, -v * y, -v]
+        A[2*i, :] = [0, 0, 0, -x, -y, -1, v * x, v * y, v]
+        A[2*i+1, :] = [x, y, 1, 0, 0, 0, -u * x, -u * y, -u]
     return A
 
 
 def dlt_unnormalized(src_points: np.ndarray, dst_points: np.ndarray) -> np.ndarray:
     """Homography H from point correspondences using unnormalized DLT (SVD)."""
-    A = _build_dlt_matrix(src_points, dst_points)
+    A = build_dlt_matrix(src_points, dst_points)
     _, _, Vt = np.linalg.svd(A)
     H = Vt[-1].reshape(3, 3)
     H /= H[2, 2] if np.abs(H[2, 2]) > 1e-12 else np.linalg.norm(H)
     return H
 
+def normalize_points(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Normalize points using my own method."""
+    t = points.mean(axis=0)
+    points = points - t
+    scale = 1.0/np.linalg.norm(points, axis=1).mean()/np.sqrt(2)
+    T = np.array([
+        [scale, 0, -scale * t[0]],
+        [0, scale, -scale * t[1]],
+        [0, 0, 1],
+    ])
+
+    return points * scale , T
 
 def dlt_normalized(src_points: np.ndarray, dst_points: np.ndarray) -> np.ndarray:
-    """Homography H using normalized DLT (Algorithm 4.2)."""
-    src_n, T_src = normalize_points(src_points)
-    dst_n, T_dst = normalize_points(dst_points)
-    A = _build_dlt_matrix(src_n, dst_n)
-    _, _, Vt = np.linalg.svd(A)
-    H_norm = Vt[-1].reshape(3, 3)
-    H = np.linalg.inv(T_dst) @ H_norm @ T_src
+    """Homography H from point correspondences using unnormalized DLT (SVD)."""
+
+    src_points, T_src = normalize_points(src_points)
+    dst_points, T_dst = normalize_points(dst_points)
+    H = dlt_unnormalized(src_points, dst_points)
+    H = np.linalg.inv(T_dst) @ H @ T_src
     H /= H[2, 2] if np.abs(H[2, 2]) > 1e-12 else np.linalg.norm(H)
     return H
-
 
 # ---------------------------------------------------------------------------
 # Algebraic residual and homogeneous scaling
@@ -279,30 +264,37 @@ def apply_homography(H: np.ndarray, pts: np.ndarray) -> np.ndarray:
     out = out[:, :2] / (np.abs(w)[:, np.newaxis] + 1e-12)
     return out
 
-
-def algebraic_residual(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> np.ndarray:
-    """Per-point algebraic residual x' × Hx as (N, 2)."""
-    src_h = to_homogeneous(src)
-    dst_h = to_homogeneous(dst)
-    Hx = (H @ src_h.T).T  # (N, 3)
-    # Cross product (x', y', 1) × (Hx, Hy, Hz): two components
-    eps = np.zeros((src.shape[0], 2))
-    eps[:, 0] = dst_h[:, 1] * Hx[:, 2] - dst_h[:, 2] * Hx[:, 1]  # v'*w - w'*Hy
-    eps[:, 1] = dst_h[:, 2] * Hx[:, 0] - dst_h[:, 0] * Hx[:, 2]  # w'*Hx - u'*w
-    return eps
+# def algebraic_residual(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+#     """Per-point algebraic residual x' × Hx as (N, 2)."""
+#     src_h = to_homogeneous(src)
+#     dst_h = to_homogeneous(dst)
+#     x_target = (H @ src_h.T).T  # (N, 3)
+    
 
 
-def rms_algebraic(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> float:
-    """RMS of algebraic error (2 components per point)."""
-    eps = algebraic_residual(H, src, dst)
-    return np.sqrt(np.mean(eps ** 2))
+# def algebraic_residual(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+#     """Per-point algebraic residual x' × Hx as (N, 2)."""
+#     src_h = to_homogeneous(src)
+#     dst_h = to_homogeneous(dst)
+#     Hx = (H @ src_h.T).T  # (N, 3)
+#     # Cross product (x', y', 1) × (Hx, Hy, Hz): two components
+#     eps = np.zeros((src.shape[0], 2))
+#     eps[:, 0] = dst_h[:, 1] * Hx[:, 2] - dst_h[:, 2] * Hx[:, 1]  # v'*w - w'*Hy
+#     eps[:, 1] = dst_h[:, 2] * Hx[:, 0] - dst_h[:, 0] * Hx[:, 2]  # w'*Hx - u'*w
+# #     return eps
+
+
+# def rms_algebraic(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> float:
+#     """RMS of algebraic error (2 components per point)."""
+#     eps = algebraic_residual(H, src, dst)
+#     return np.sqrt(np.mean(eps ** 2))
 
 
 # ---------------------------------------------------------------------------
 # Reprojection and one-view errors
 # ---------------------------------------------------------------------------
 
-def reprojection_error_symmetric(
+def symmetric_transfer_error(
     H: np.ndarray,
     src: np.ndarray,
     dst: np.ndarray,
@@ -338,6 +330,30 @@ def reprojection_error_one_view(
 # Sampson error (first-order approximation to geometric error)
 # ---------------------------------------------------------------------------
 
+
+def sampson_error_my(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> float:
+    n = src.shape[0]
+    J = sampson_j_matrix(H, src, dst)
+    h = H.ravel()
+    A = build_dlt_matrix(src, dst)
+    eps = A@h
+    delta = -J.T@np.linalg.solve(J@J.T, eps)
+    error = np.sqrt(np.sum(delta ** 2) /n)  # note: np.mean(delta ** 2) will be 4 times smaller, because we are summing over 4n numbers
+    return error, delta
+
+def sampson_j_matrix(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    n = src.shape[0]
+    J = np.zeros((2 * n, 4 * n))
+    h1,h2,h3,h4,h5,h6,h7,h8,h9 = H.ravel()
+    for i in range(n):
+        x, y = src[i, 0], src[i, 1]
+        u, v = dst[i, 0], dst[i, 1]
+        J[2*i, 4*i:4*i+4] = [-h4 + v*h7, -h5 + v*h8, 0, h7*x + h8*y + h9]
+        J[2*i+1, 4*i:4*i+4] = [h1 - u*h7, h2 - u*h8, -h7*x - h8*y - h9, 0]
+    return J
+
+# ---------------------------------------------------------------------------
+
 def sampson_residual_per_point(
     H: np.ndarray,
     x: float,
@@ -349,9 +365,9 @@ def sampson_residual_per_point(
     h11, h12, h13 = H[0, 0], H[0, 1], H[0, 2]
     h21, h22, h23 = H[1, 0], H[1, 1], H[1, 2]
     h31, h32, h33 = H[2, 0], H[2, 1], H[2, 2]
-    wx = h31 * x + h32 * y + h33
     hx = h11 * x + h12 * y + h13
     hy = h21 * x + h22 * y + h23
+    wx = h31 * x + h32 * y + h33
     eps1 = v * wx - hy
     eps2 = hx - u * wx
     eps = np.array([eps1, eps2])
@@ -458,7 +474,14 @@ def gold_standard_error_rms(
     d2 = np.sum((dst - x_hat_prime) ** 2, axis=1)
     return np.sqrt(np.mean(d1 + d2))
 
-
+# def sampson_error_my(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> float:
+#     n = src.shape[0]
+#     J = sampson_j_matrix(H, src, dst)
+#     eps = np.zeros(2 * n)
+#     for i in range(n):
+#         eps[2*i] = dst[i, 0] - (H[0, 0]*src[i, 0] + H[0, 1]*src[i, 1] + H[0, 2])
+#         eps[2*i+1] = dst[i, 1] - (H[1, 0]*src[i, 0] + H[1, 1]*src[i, 1] + H[1, 2])
+#     return np.sqrt(np.mean(eps ** 2))
 # ---------------------------------------------------------------------------
 # Sampson optimization: minimize sum of Sampson squared errors over H
 # ---------------------------------------------------------------------------
@@ -494,10 +517,10 @@ def homography_sampson_optimized(src: np.ndarray, dst: np.ndarray, H_init: np.nd
 # Homogeneous scaling: H scaled so ||H||_F = 1, then algebraic RMS
 # ---------------------------------------------------------------------------
 
-def homogeneous_scaling_error(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> float:
-    """Algebraic RMS when H is scaled to unit Frobenius norm."""
-    H_scaled = H / (np.linalg.norm(H) + 1e-12)
-    return rms_algebraic(H_scaled, src, dst)
+# def homogeneous_scaling_error(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> float:
+#     """Algebraic RMS when H is scaled to unit Frobenius norm."""
+#     H_scaled = H / (np.linalg.norm(H) + 1e-12)
+#     return rms_algebraic(H_scaled, src, dst)
 
 
 # ---------------------------------------------------------------------------
@@ -542,16 +565,19 @@ def run_pipeline(
     H_unnorm = dlt_unnormalized(src, dst)
     H_norm = dlt_normalized(src, dst)
 
-    # Linear normalized: H from normalized DLT, then reprojection error in original coords
-    err_linear_normalized = reprojection_error_symmetric(H_norm, src, dst)
-
     # Linear unnormalized
-    err_linear_unnormalized = reprojection_error_symmetric(H_unnorm, src, dst)
+    err_linear_unnormalized = symmetric_transfer_error(H_unnorm, src, dst)
+
+    # Linear normalized: H from normalized DLT, then reprojection error in original coords
+    err_linear_normalized = symmetric_transfer_error(H_norm, src, dst)
 
     # Homogeneous scaling: H scaled to unit norm, algebraic RMS
-    err_homogeneous_scaling = homogeneous_scaling_error(H_norm, src, dst)
+    # err_homogeneous_scaling = homogeneous_scaling_error(H_norm, src, dst)     ##  what is this?
 
     # Sampson: refine H by minimizing Sampson error, then report Sampson RMS
+
+    err_sampson_my, delta_my = sampson_error_my(H_norm, src, dst)
+
     H_sampson = homography_sampson_optimized(src, dst, H_norm.copy())
     err_sampson = sampson_error_rms(H_sampson, src, dst)
 
@@ -568,10 +594,10 @@ def run_pipeline(
     # ----- Report -----
     print("Homography estimation from chessboard correspondences")
     print("=" * 60)
-    print(f"  Linear normalized (reproj RMS):     {err_linear_normalized:.6f}")
+    print(f"  Linear unnormalized (reproj RMS symmetric transfer error):   {err_linear_unnormalized:.6f}")
+    print(f"  Linear normalized (reproj RMS symmetric transfer error):     {err_linear_normalized:.6f}")
     print(f"  Gold Standard (reproj RMS):        {err_gold_standard:.6f}")
-    print(f"  Linear unnormalized (reproj RMS):   {err_linear_unnormalized:.6f}")
-    print(f"  Homogeneous scaling (algebraic RMS): {err_homogeneous_scaling:.6f}")
+    # print(f"  Homogeneous scaling (algebraic RMS): {err_homogeneous_scaling:.6f}")        # what is this?
     print(f"  Sampson (RMS):                      {err_sampson:.6f}")
     print(f"  Error in 1 view (second image):     {err_one_view_second:.6f}")
     print(f"  Error in 1 view (first image):      {err_one_view_first:.6f}")
@@ -594,3 +620,19 @@ def run_pipeline(
 
 if __name__ == "__main__":
     run_pipeline()
+
+
+"""
+
+Homography estimation from chessboard correspondences
+============================================================
+  Linear unnormalized (reproj RMS):   0.781032
+  Linear normalized (reproj RMS):     0.779797
+  Gold Standard (reproj RMS):        0.544325
+  Homogeneous scaling (algebraic RMS): 0.003416
+  Sampson (RMS):                      0.544383
+  Error in 1 view (second image):     0.794270
+  Error in 1 view (first image):      0.765120
+============================================================
+
+"""

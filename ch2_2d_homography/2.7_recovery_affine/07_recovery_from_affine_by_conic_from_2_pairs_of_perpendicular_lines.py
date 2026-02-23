@@ -1,5 +1,5 @@
 """
-load ch2\2.7_recovery_affine\affinely_rectificed_floor.jpg
+load ch2_2d_homography\2.7_recovery_affine\affinely_rectificed_floor.jpg
 pop out the window to let the user click 6 points, say, A, B, C, D, E, F
 get homogeneous coordinates of line AB and BC
 line DE and EF
@@ -259,7 +259,7 @@ def construct_homography_from_K(K):
 
 def main():
     # 1. Load the affinely rectified floor image
-    image_path = r'ch2\2.7_recovery_affine\affinely_rectificed_floor.jpg'
+    image_path = r'ch2_2d_homography\2.7_recovery_affine\affinely_rectificed_floor.jpg'
     
     # Try different possible paths
     if not os.path.exists(image_path):

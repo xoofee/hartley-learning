@@ -1,5 +1,5 @@
 """
-load ch2\2.3_projective_transform\building.jpg
+load ch2_2d_homography\2.3_projective_transform\building.jpg
 pop out the window to let the user click 20 points, say, A1 B1 C1 D1, A2 B2 C2 D2, A3 B3 C3 D3, A4 B4 C4 D4, A5 B5 C5 D5
 get homogeneous coordinates of lines
 A1B1, C1D1
@@ -483,7 +483,7 @@ def load_points_from_json(json_path):
 
 def main():
     # 1. Load the building image
-    image_path = r'ch2\2.3_projective_transform\building.jpg'
+    image_path = r'ch2_2d_homography\2.3_projective_transform\building.jpg'
     
     # Try different possible paths
     if not os.path.exists(image_path):
@@ -502,7 +502,7 @@ def main():
     print(f"Image loaded: {image.shape}")
     
     # 2. Try to load cached points, otherwise let user click 20 points
-    json_path = r'ch2\2.7_recovery_affine\08_metric_recovery_by_5_pairs_of_perpendicular_lines.points.json'
+    json_path = r'ch2_2d_homography\2.7_recovery_affine\08_metric_recovery_by_5_pairs_of_perpendicular_lines.points.json'
     
     # Try different possible paths for JSON file
     if not os.path.exists(json_path):

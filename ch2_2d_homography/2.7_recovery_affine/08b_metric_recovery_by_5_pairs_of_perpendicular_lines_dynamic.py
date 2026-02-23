@@ -1,7 +1,7 @@
 """
 same function as 08_metric_recovery_by_5_pairs_of_perpendicular_lines.py
 
-but let user drag the 15 points like ch2\2.7_recovery_affine\05_homography_research_gui.py
+but let user drag the 15 points like ch2_2d_homography\2.7_recovery_affine\05_homography_research_gui.py
 
 and dynamicall update the transformed image
 """
@@ -27,9 +27,9 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 
 
-DEFAULT_IMAGE_PATH = os.path.join("ch2", "2.3_projective_transform", "building.jpg")
+DEFAULT_IMAGE_PATH = os.path.join("ch2_2d_homography", "2.3_projective_transform", "building.jpg")
 DEFAULT_POINTS_JSON = os.path.join(
-    "ch2",
+    "ch2_2d_homography",
     "2.7_recovery_affine",
     "08_metric_recovery_by_5_pairs_of_perpendicular_lines.points.json",
 )

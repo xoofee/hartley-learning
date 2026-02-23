@@ -1,7 +1,7 @@
 """
 
 
-let user select 3 fixed points (eigenvector) to calculate the homography matrix H, refer to ch2\2.7_recovery_affine\05_homography_research_gui.py
+let user select 3 fixed points (eigenvector) to calculate the homography matrix H, refer to ch2_2d_homography\2.7_recovery_affine\05_homography_research_gui.py
 
 but:
   - do not close and then redraw.

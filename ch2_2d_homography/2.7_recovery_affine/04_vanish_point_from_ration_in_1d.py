@@ -28,7 +28,7 @@ An example of vanishing points computed in this manner is shown in figure 2.14. 
 
 
 
-1 load the image like in ch2\2.7_recovery_affine\03_affine_recovery_of_a_floor.py
+1 load the image like in ch2_2d_homography\2.7_recovery_affine\03_affine_recovery_of_a_floor.py
 2 let the user click 3 colinear points on the image, say, A, B, C, note B is between A and C
 3 a = AB , b = BC in eucludian distance
 4 A is origin
@@ -193,7 +193,7 @@ def find_homography_1d(src_points, dst_points):
 
 def main():
     # 1. Load the image
-    image_path = r'ch2\2.7_recovery_affine\floor.jpg'
+    image_path = r'ch2_2d_homography\2.7_recovery_affine\floor.jpg'
     
     # Try different possible paths
     if not os.path.exists(image_path):
