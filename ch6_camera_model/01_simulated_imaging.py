@@ -70,6 +70,14 @@ let the user set camera center C in world coordinate. because t is not easy to u
 
 then make t only readable
 
+# pitch
+
+Since the world is similar to ENU (east north up) with z pointing up
+but the camera convention has y down,
+rotate the camera 90° around the x-axis so the camera y-axis points down,
+then apply pitch, yaw, roll. That makes pitch relative to the world xy plane.
+
+
 """
 
 from __future__ import annotations
@@ -701,16 +709,18 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         main_layout = QHBoxLayout()
 
-        # Left: matplotlib figure with 3D and image
+        # Left: matplotlib figure with 3D and image (stretch to use space)
         self.fig = plt.figure(figsize=(8, 5))
         self.ax3d = self.fig.add_subplot(121, projection="3d")
         self.ax_img = self.fig.add_subplot(122)
+        self._set_3d_axes_limits_once()
         self.canvas = FigureCanvas(self.fig)
-        main_layout.addWidget(self.canvas, 2)
+        main_layout.addWidget(self.canvas, 1)
 
-        # Right: scroll area with group boxes (like 05_homography_research_gui)
+        # Right: scroll area with minimal width so plot expands
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMaximumWidth(450)
         scroll_widget = QWidget()
         right_layout = QVBoxLayout()
         self.params_widget = CameraParamsWidget(self.state)
@@ -754,11 +764,20 @@ class MainWindow(QMainWindow):
         right_layout.addStretch()
         scroll_widget.setLayout(right_layout)
         scroll.setWidget(scroll_widget)
-        main_layout.addWidget(scroll, 1)
+        main_layout.addWidget(scroll, 0)
         central.setLayout(main_layout)
 
         self._update_matrix_displays()
         self._draw_all()
+
+    def _set_3d_axes_limits_once(self) -> None:
+        """Set 3D scene axis limits and equal box aspect once at init. User zoom/pan changes limits; we preserve them on redraw."""
+        margin = 2.0
+        self.ax3d.set_xlim(-margin, margin)
+        self.ax3d.set_ylim(-margin, margin)
+        self.ax3d.set_zlim(-0.5, 2)
+        # Equal axis scale: box aspect = (x_range, y_range, z_range)
+        self.ax3d.set_box_aspect((2 * margin, 2 * margin, 2.5))
 
     def _on_params_changed(self) -> None:
         self.params_widget.apply_to_state()
@@ -810,6 +829,10 @@ class MainWindow(QMainWindow):
     def _draw_all(self) -> None:
         self.image_width_px = max(1, int(self.state.sensor_width_mm / self.state.pixel_size_x_mm))
         self.image_height_px = max(1, int(self.state.sensor_height_mm / self.state.pixel_size_y_mm))
+        # Preserve 3D view limits (user may have zoomed/panned); do not change them when editing params
+        xlim = self.ax3d.get_xlim()
+        ylim = self.ax3d.get_ylim()
+        zlim = self.ax3d.get_zlim()
         self.ax3d.cla()
         self.ax_img.cla()
         camera_center_world = self.state.get_camera_center_world()
@@ -840,10 +863,12 @@ class MainWindow(QMainWindow):
         self.ax3d.set_ylabel("Y")
         self.ax3d.set_zlabel("Z")
         self.ax3d.set_title("3D scene and camera")
-        margin = 2.0
-        self.ax3d.set_xlim(-margin, margin)
-        self.ax3d.set_ylim(-margin, margin)
-        self.ax3d.set_zlim(-0.5, 2)
+        # Restore 3D limits and keep axis equal (only user zoom/pan changes limits)
+        self.ax3d.set_xlim(xlim)
+        self.ax3d.set_ylim(ylim)
+        self.ax3d.set_zlim(zlim)
+        rx, ry, rz = xlim[1] - xlim[0], ylim[1] - ylim[0], zlim[1] - zlim[0]
+        self.ax3d.set_box_aspect((rx, ry, rz))
         draw_projected_scene(
             self.ax_img, P, self.square_pts, self.triangle_pts, self.image_width_px, self.image_height_px
         )
