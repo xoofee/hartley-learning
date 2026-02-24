@@ -127,6 +127,23 @@ def get_scene_triangle(width: float = 0.8, height: float = 1.0, x_plane: float =
     ])
 
 
+def get_scene_rectangle(
+    width_y: float = 0.4,
+    height_z: float = 0.4,
+    x_plane: float = 1.5,
+    y_center: float = 0.8,
+    z_center: float = 0.4,
+) -> np.ndarray:
+    """Vertical rectangle in plane x=x_plane (same plane as triangle), near the triangle. (4, 3)."""
+    hy, hz = width_y / 2, height_z / 2
+    return np.array([
+        [x_plane, y_center - hy, z_center - hz],
+        [x_plane, y_center + hy, z_center - hz],
+        [x_plane, y_center + hy, z_center + hz],
+        [x_plane, y_center - hy, z_center + hz],
+    ])
+
+
 # ---------------------------------------------------------------------------
 # Pinhole camera model
 # ---------------------------------------------------------------------------
@@ -414,12 +431,14 @@ def draw_projected_scene(
     P: np.ndarray,
     square_pts: np.ndarray,
     triangle_pts: np.ndarray,
+    rectangle_pts: np.ndarray,
     img_width: float,
     img_height: float,
 ) -> None:
-    """Draw projected square and triangle on axes (for display). Uses projected vertices and fill."""
+    """Draw projected square, triangle, and rectangle on axes (for display). Uses projected vertices and fill."""
     sq_uv = project_points(P, square_pts)
     tri_uv = project_points(P, triangle_pts)
+    rect_uv = project_points(P, rectangle_pts)
     ax.set_xlim(0, img_width)
     ax.set_ylim(img_height, 0)
     ax.set_aspect("equal")
@@ -428,8 +447,10 @@ def draw_projected_scene(
     from matplotlib.patches import Polygon
     poly_sq = Polygon(sq_uv, facecolor="green", edgecolor="darkgreen", alpha=0.8)
     poly_tri = Polygon(tri_uv, facecolor="red", edgecolor="darkred", alpha=0.8)
+    poly_rect = Polygon(rect_uv, facecolor="blue", edgecolor="darkblue", alpha=0.8)
     ax.add_patch(poly_sq)
     ax.add_patch(poly_tri)
+    ax.add_patch(poly_rect)
 
 
 def vanishing_points_from_R_cw(K: np.ndarray, R_cw: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
@@ -847,6 +868,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.square_pts = get_scene_square(1.0, 0.0)
         self.triangle_pts = get_scene_triangle(0.8, 1.0, 1.5)
+        self.rectangle_pts = get_scene_rectangle(0.4, 0.4, 1.5, y_center=0.8, z_center=0.4)
         self.state = CameraState()
         self.init_ui()
 
@@ -1009,10 +1031,15 @@ class MainWindow(QMainWindow):
         self.ax3d.scatter(
             self.triangle_pts[:, 0], self.triangle_pts[:, 1], self.triangle_pts[:, 2], c="red", s=20
         )
+        self.ax3d.scatter(
+            self.rectangle_pts[:, 0], self.rectangle_pts[:, 1], self.rectangle_pts[:, 2], c="blue", s=20
+        )
         sq_edges = np.vstack([self.square_pts, self.square_pts[0:1]])
         tri_edges = np.vstack([self.triangle_pts, self.triangle_pts[0:1]])
+        rect_edges = np.vstack([self.rectangle_pts, self.rectangle_pts[0:1]])
         self.ax3d.plot(sq_edges[:, 0], sq_edges[:, 1], sq_edges[:, 2], "g-", lw=2)
         self.ax3d.plot(tri_edges[:, 0], tri_edges[:, 1], tri_edges[:, 2], "r-", lw=2)
+        self.ax3d.plot(rect_edges[:, 0], rect_edges[:, 1], rect_edges[:, 2], "b-", lw=2)
         self.ax3d.set_xlabel("X")
         self.ax3d.set_ylabel("Y")
         self.ax3d.set_zlabel("Z")
@@ -1024,7 +1051,8 @@ class MainWindow(QMainWindow):
         rx, ry, rz = xlim[1] - xlim[0], ylim[1] - ylim[0], zlim[1] - zlim[0]
         self.ax3d.set_box_aspect((rx, ry, rz))
         draw_projected_scene(
-            self.ax_img, P, self.square_pts, self.triangle_pts, self.image_width_px, self.image_height_px
+            self.ax_img, P, self.square_pts, self.triangle_pts, self.rectangle_pts,
+            self.image_width_px, self.image_height_px
         )
         K = self.state.get_K()
         draw_vanishing_points(
