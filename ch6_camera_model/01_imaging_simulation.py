@@ -241,34 +241,34 @@ def pitch_yaw_roll_from_R(R_world_to_cam: np.ndarray) -> tuple[float, float, flo
     """
     Recover (yaw, pitch, roll) in degrees from R_world_to_cam.
 
-    This correctly accounts for the base camera rotation R_CW_BASE_CAM.
+    Uses the same convention as R_wc_from_yaw_pitch_roll_camera:
+    camera axes X right, Y down, Z forward;
+    R_wc = Ry(yaw) @ Rx(pitch) @ Rz(roll).
+    We have R_bw = R_world_to_cam @ R_CW_BASE_CAM.T = R_wc.T, so R_wc = R_bw.T.
+    Extract angles from R_wc (i.e. from R_bw).
     """
-
-    # 1) remove base camera orientation
+    # Remove base camera orientation -> body (camera) orientation world-to-body
     R_bw = R_world_to_cam @ R_CW_BASE_CAM.T
-
-    # 2) convert to R_wb (the one matching our construction formula)
-    R_wb = R_bw.T
-
-    # ---- extract angles from R_wb = Rz(yaw) @ Rx(pitch) @ Ry(roll)
-
-    sp = R_wb[2, 1]
+    # R_wc = R_bw.T = Ry(yaw) @ Rx(pitch) @ Rz(roll); extract from R_wc entries via R_bw[i,j] = R_wc[j,i]
+    # pitch: R_wc[1,2] = -sin(pitch)
+    sp = -R_bw[2, 1]
     sp = np.clip(sp, -1.0, 1.0)
     pitch = np.arcsin(sp)
-
     cp = np.cos(pitch)
 
     if abs(cp) > 1e-6:
-        yaw = np.arctan2(-R_wb[0, 1], R_wb[1, 1])
-        roll = np.arctan2(-R_wb[2, 0], R_wb[2, 2])
+        # roll: R_wc[1,0] = cos(pitch)*sin(roll), R_wc[1,1] = cos(pitch)*cos(roll)
+        roll = np.arctan2(R_bw[0, 1], R_bw[1, 1])
+        # yaw: R_wc[0,2] = sin(yaw)*cos(pitch), R_wc[2,2] = cos(yaw)*cos(pitch)
+        yaw = np.arctan2(R_bw[2, 0], R_bw[2, 2])
     else:
-        # gimbal lock
-        yaw = np.arctan2(R_wb[1, 0], R_wb[0, 0])
+        # gimbal lock (pitch ~ ±90°): set roll=0, yaw from R_wc[0,0], R_wc[0,1]
         roll = 0.0
+        yaw = np.arctan2(-R_bw[1, 0], R_bw[0, 0])
 
     return (
-        np.rad2deg(yaw),
         np.rad2deg(pitch),
+        np.rad2deg(yaw),
         np.rad2deg(roll),
     )
 
