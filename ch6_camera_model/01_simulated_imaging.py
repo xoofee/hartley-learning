@@ -27,17 +27,14 @@ note: we do not use any opengl or maya or blender or any 3d software to generate
 
 do not remove this comment.
 
-coordinate:
+coordinate (world: X right, Y forward, Z up, ENU-like):
 
-    (into the scene)
-   Z (forward)
+    ↑ Z (up)
+    |
+    o --------→ X (right)
+   /
   /
- /
-o --------→ X (right)
-|
-|
-↓
-Y (down)
+ Y (forward, into scene)
 
 
 remove zoom pan rotate code
@@ -47,7 +44,7 @@ still make the initial pose (pitch yaw roll) like the current (pitch 17 degrees 
 
 the translation vector t should have spin to adjust
 
- ✅ Yaw (around Y axis, pointing down)
+ ✅ Yaw (around Z axis, up)
 
 Positive yaw = turn camera to the right
 
@@ -59,7 +56,7 @@ Positive pitch = look down
 
 camera tilts downward
 
-✅ Roll (around Z axis, pointing forward)
+✅ Roll (around Y axis, forward)
 
 Positive roll = clockwise rotation in the image
 
@@ -72,10 +69,9 @@ then make t only readable
 
 # pitch
 
-Since the world is similar to ENU (east north up) with z pointing up
-but the camera convention has y down,
-rotate the camera 90° around the x-axis so the camera y-axis points down,
-then apply pitch, yaw, roll. That makes pitch relative to the world xy plane.
+World is X right, Y forward, Z up. Camera default (zero angles) looks along -Y (into scene).
+R_base aligns camera frame (optical axis, image Y down) with world; then pitch, yaw, roll are applied.
+Pitch is relative to the world horizontal (xy) plane.
 
 
 """
@@ -132,41 +128,149 @@ def get_scene_triangle(width: float = 0.8, height: float = 1.0, x_plane: float =
 # Pinhole camera model
 # ---------------------------------------------------------------------------
 
-def R_cam_from_pitch_yaw_roll(pitch_deg: float, yaw_deg: float, roll_deg: float) -> np.ndarray:
-    """
-    Build R_cam (3x3) from pitch, yaw, roll in degrees.
-    World: X right, Y down, Z forward.
-    Yaw around Y (positive = turn right), pitch around X (positive = look down), roll around Z (positive = CW in image).
-    R_cam = R_z(roll) @ R_x(pitch) @ R_y(yaw); columns = camera axes in world.
-    """
-    p = np.radians(pitch_deg)
-    y = np.radians(yaw_deg)
-    r = np.radians(roll_deg)
-    cp, sp = np.cos(p), np.sin(p)
-    cy, sy = np.cos(y), np.sin(y)
-    cr, sr = np.cos(r), np.sin(r)
-    # R_y(yaw) around Y (down): yaw positive = turn right
-    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=np.float64)
-    # R_x(pitch) around X (right): pitch positive = look down
-    Rx = np.array([[1, 0, 0], [0, cp, sp], [0, -sp, cp]], dtype=np.float64)
-    # R_z(roll) around Z (forward): roll positive = image CW
-    Rz = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]], dtype=np.float64)
-    R_cam = Rz @ Rx @ Ry
-    return R_cam
+import numpy as np
 
+# convertion: R_wb: body to world, R_bw: world to body, R_cw: world to camera, R_wc: camera to world
+
+
+def R_wc_from_yaw_pitch_roll_camera(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
+    """
+    Build R_wb (3x3) which represents the orientation of the body in world coordinates.
+
+    Note: the angles are eular angles describe the coordinate system rotation (describing the camera or aircraft orientation/pose), not vector rotation
+
+    yaw pitch roll are never about vector rotation. they are about coordinate system rotation.
+
+    camera axes:
+        X: right
+        Y: down
+        Z: forward
+
+    Rotations (right-hand rule, positive is CCW when looking along +axis):
+        yaw   : about +Y
+        pitch : about +X
+        roll  : about +Z
+
+    Composition (extrinsic rotations about world axes):
+        R_wc = Ry(yaw) @ Rx(pitch) @ Rz(roll)
+    """
+
+    yaw = np.deg2rad(yaw_deg)
+    pitch = np.deg2rad(pitch_deg)
+    roll = np.deg2rad(roll_deg)
+
+    # Rotation about Z (yaw) coordinate, not vector, so the columns are the new x y z axis in the original world coordinate system
+    Rz_roll = np.array([
+        [ np.cos(roll), -np.sin(roll), 0.0],
+        [ np.sin(roll),  np.cos(roll), 0.0],
+        [ 0.0,          0.0,         1.0]
+    ])
+
+    # Rotation about X (pitch)
+    Rx_pitch = np.array([
+        [1.0, 0.0,           0.0],
+        [0.0, np.cos(pitch), -np.sin(pitch)],
+        [0.0, np.sin(pitch),  np.cos(pitch)]
+    ])
+
+    # Rotation about Y (roll)
+    Ry_yaw = np.array([
+        [ np.cos(yaw), 0.0, np.sin(yaw)],
+        [ 0.0,          1.0, 0.0],
+        [-np.sin(yaw), 0.0, np.cos(yaw)]
+    ])
+
+    R_wc = Ry_yaw @ Rx_pitch @ Rz_roll
+    return R_wc
+
+def R_wb_from_yaw_pitch_roll_world(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
+    """
+    Build R_wb (3x3) which represents the orientation of the body in world coordinates.
+
+    Note: the angles are eular angles describe the coordinate system rotation (describing the camera or aircraft orientation/pose), not vector rotation
+
+    yaw pitch roll are never about vector rotation. they are about coordinate system rotation.
+
+    World axes:
+        X: right
+        Y: forward
+        Z: up
+
+    Rotations (right-hand rule, positive is CCW when looking along +axis):
+        yaw   : about +Z
+        pitch : about +X
+        roll  : about +Y
+
+    Composition (extrinsic rotations about world axes):
+        R_wb = Rz(yaw) @ Rx(pitch) @ Ry(roll)
+    """
+
+    yaw = np.deg2rad(yaw_deg)
+    pitch = np.deg2rad(pitch_deg)
+    roll = np.deg2rad(roll_deg)
+
+    # Rotation about Z (yaw) coordinate, not vector, so the columns are the new x y z axis in the original world coordinate system
+    Rz = np.array([
+        [ np.cos(yaw), -np.sin(yaw), 0.0],
+        [ np.sin(yaw),  np.cos(yaw), 0.0],
+        [ 0.0,          0.0,         1.0]
+    ])
+
+    # Rotation about X (pitch)
+    Rx = np.array([
+        [1.0, 0.0,           0.0],
+        [0.0, np.cos(pitch), -np.sin(pitch)],
+        [0.0, np.sin(pitch),  np.cos(pitch)]
+    ])
+
+    # Rotation about Y (roll)
+    Ry = np.array([
+        [ np.cos(roll), 0.0, np.sin(roll)],
+        [ 0.0,          1.0, 0.0],
+        [-np.sin(roll), 0.0, np.cos(roll)]
+    ])
+
+    R_wb = Rz @ Rx @ Ry
+    return R_wb
+
+# Base rotation: camera default (yaw=pitch=roll=0) has optical axis along world -Y (forward into scene).
+R_CW_BASE_CAM = R_wb_from_yaw_pitch_roll_world(0.0, -90.0, 0.0).T
+# R_CW_BASE_CAM = np.eye(3)
 
 def pitch_yaw_roll_from_R(R_world_to_cam: np.ndarray) -> tuple[float, float, float]:
-    """Extract pitch_deg, yaw_deg, roll_deg from R_world_to_cam. R_cam = R_world_to_cam.T."""
-    R = R_world_to_cam.T
-    pitch_rad = np.arcsin(np.clip(R[2, 1], -1.0, 1.0))
-    cp = np.cos(pitch_rad)
-    if np.abs(cp) < 1e-9:
-        roll_rad = 0.0
-        yaw_rad = np.arctan2(-R[2, 0], R[2, 2])
+    """
+    Recover (yaw, pitch, roll) in degrees from R_world_to_cam.
+
+    This correctly accounts for the base camera rotation R_CW_BASE_CAM.
+    """
+
+    # 1) remove base camera orientation
+    R_bw = R_world_to_cam @ R_CW_BASE_CAM.T
+
+    # 2) convert to R_wb (the one matching our construction formula)
+    R_wb = R_bw.T
+
+    # ---- extract angles from R_wb = Rz(yaw) @ Rx(pitch) @ Ry(roll)
+
+    sp = R_wb[2, 1]
+    sp = np.clip(sp, -1.0, 1.0)
+    pitch = np.arcsin(sp)
+
+    cp = np.cos(pitch)
+
+    if abs(cp) > 1e-6:
+        yaw = np.arctan2(-R_wb[0, 1], R_wb[1, 1])
+        roll = np.arctan2(-R_wb[2, 0], R_wb[2, 2])
     else:
-        roll_rad = np.arctan2(-R[0, 1], R[1, 1])
-        yaw_rad = np.arctan2(-R[2, 0], R[2, 2])
-    return float(np.degrees(pitch_rad)), float(np.degrees(yaw_rad)), float(np.degrees(roll_rad))
+        # gimbal lock
+        yaw = np.arctan2(R_wb[1, 0], R_wb[0, 0])
+        roll = 0.0
+
+    return (
+        np.rad2deg(yaw),
+        np.rad2deg(pitch),
+        np.rad2deg(roll),
+    )
 
 def build_intrinsic(
     focal_length_mm: float,
@@ -197,15 +301,13 @@ def build_intrinsic(
 
 def build_projection_matrix(
     K: np.ndarray,
-    R_cam: np.ndarray,
+    R_cw: np.ndarray,
     camera_center_world: np.ndarray,
 ) -> np.ndarray:
     """P = K [R_world_to_cam | t_world_to_cam]. R_wc = R_cam^T, t_wc = -R_wc @ camera_center_world. P is (3, 4)."""
-    R_world_to_cam = R_cam.T
-    t_world_to_cam = (-R_world_to_cam @ camera_center_world).reshape(3, 1)
-    Rt = np.hstack([R_world_to_cam, t_world_to_cam])
+    t_world_to_cam = (-R_cw @ camera_center_world).reshape(3, 1)
+    Rt = np.hstack([R_cw, t_world_to_cam])
     return K @ Rt
-
 
 def decompose_P(P: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decompose P (3,4) into K (3,3), R_world_to_cam (3,3), t_world_to_cam (3,1) with P = K [R_wc|t_wc]. Uses RQ on M = P[:,:3]."""
@@ -250,9 +352,11 @@ def get_camera_pyramid(
     b2 = np.array([scale, -scale, depth])
     b3 = np.array([scale, scale, depth])
     b4 = np.array([-scale, scale, depth])
-    base_cam = np.array([b1, b2, b3, b4])
-    base_world = (R_cam @ base_cam.T).T + C
-    return base_world, C
+    pyramid_points_cam = np.array([b1, b2, b3, b4])
+
+    R_wc = R_cam.T
+    pyramid_points_cam_world = (R_wc @ pyramid_points_cam.T).T + C
+    return pyramid_points_cam_world, C
 
 
 # ---------------------------------------------------------------------------
@@ -346,16 +450,15 @@ class CameraState:
         self.cx_px_override: float | None = None
         self.cy_px_override: float | None = None
         # 6-DOF pose: pitch/yaw/roll (degrees), camera center C in world (t = -R @ C)
-        self.pitch_deg = 17.0
-        self.yaw_deg = 0.0
+        self.pitch_deg = -30.0
+        self.yaw_deg = -90.0
         self.roll_deg = 0.0
-        # Initial C so that with pitch=17° we get the same view as t=(0,0,-4): C = -R_cam.T @ t
-        self.C_x = 0.0
-        self.C_y = 4.0 * np.sin(np.radians(17.0))
-        self.C_z = 4.0 * np.cos(np.radians(17.0))
+        self.C_x = 4.0
+        self.C_y = 0.0
+        self.C_z = 2.0
 
-    def get_R_cam(self) -> np.ndarray:
-        return R_cam_from_pitch_yaw_roll(self.pitch_deg, self.yaw_deg, self.roll_deg)
+    def get_R_cw(self) -> np.ndarray:
+        return R_wc_from_yaw_pitch_roll_camera(self.yaw_deg, self.pitch_deg, self.roll_deg).T @ R_CW_BASE_CAM
 
     def get_camera_center_world(self) -> np.ndarray:
         return np.array([self.C_x, self.C_y, self.C_z])
@@ -373,17 +476,16 @@ class CameraState:
 
     def get_P(self) -> np.ndarray:
         camera_center_world = self.get_camera_center_world()
-        R_cam = self.get_R_cam()
+        R_cam = self.get_R_cw()
         K = self.get_K()
         return build_projection_matrix(K, R_cam, camera_center_world)
 
     def get_R_and_t(self) -> tuple[np.ndarray, np.ndarray]:
         """Return (R_world_to_cam, t_world_to_cam). t = -R @ C."""
-        R_cam = self.get_R_cam()
-        R_world_to_cam = R_cam.T
+        R_cw = self.get_R_cw()
         C = np.array([[self.C_x], [self.C_y], [self.C_z]])
-        t_world_to_cam = -R_world_to_cam @ C
-        return R_world_to_cam, t_world_to_cam
+        t_world_to_cam = -R_cw @ C
+        return R_cw, t_world_to_cam
 
     def set_from_K(self, K: np.ndarray) -> None:
         """Update focal_length_mm and principal point (px) from intrinsic matrix K. K[0,0]=fx_px, K[1,1]=fy_px."""
@@ -657,6 +759,7 @@ class CameraCenterWidget(QWidget):
         self.spin_Cx = QDoubleSpinBox()
         self.spin_Cx.setRange(-100.0, 100.0)
         self.spin_Cx.setDecimals(3)
+        self.spin_Cx.setSingleStep(0.1)
         self.spin_Cx.setValue(state.C_x)
         self.spin_Cx.setMaximumWidth(72)
         grid.addWidget(self.spin_Cx, 0, 1)
@@ -664,6 +767,7 @@ class CameraCenterWidget(QWidget):
         self.spin_Cy = QDoubleSpinBox()
         self.spin_Cy.setRange(-100.0, 100.0)
         self.spin_Cy.setDecimals(3)
+        self.spin_Cy.setSingleStep(0.1)
         self.spin_Cy.setValue(state.C_y)
         self.spin_Cy.setMaximumWidth(72)
         grid.addWidget(self.spin_Cy, 1, 1)
@@ -671,6 +775,7 @@ class CameraCenterWidget(QWidget):
         self.spin_Cz = QDoubleSpinBox()
         self.spin_Cz.setRange(-100.0, 100.0)
         self.spin_Cz.setDecimals(3)
+        self.spin_Cz.setSingleStep(0.1)
         self.spin_Cz.setValue(state.C_z)
         self.spin_Cz.setMaximumWidth(72)
         grid.addWidget(self.spin_Cz, 2, 1)
@@ -772,12 +877,18 @@ class MainWindow(QMainWindow):
 
     def _set_3d_axes_limits_once(self) -> None:
         """Set 3D scene axis limits and equal box aspect once at init. User zoom/pan changes limits; we preserve them on redraw."""
-        margin = 2.0
+        margin = 6.0
         self.ax3d.set_xlim(-margin, margin)
         self.ax3d.set_ylim(-margin, margin)
-        self.ax3d.set_zlim(-0.5, 2)
+        self.ax3d.set_zlim(-0.5, margin)
         # Equal axis scale: box aspect = (x_range, y_range, z_range)
-        self.ax3d.set_box_aspect((2 * margin, 2 * margin, 2.5))
+        # self.ax3d.set_box_aspect((2 * margin, 2 * margin, 2 * margin))
+
+        xrange = margin * 2
+        yrange = margin * 2
+        zrange = margin + 0.5
+        # self.ax3d.set_box_aspect((xrange, yrange, zrange))
+        self.ax3d.set_box_aspect((1, 1, 2))
 
     def _on_params_changed(self) -> None:
         self.params_widget.apply_to_state()
@@ -836,7 +947,7 @@ class MainWindow(QMainWindow):
         self.ax3d.cla()
         self.ax_img.cla()
         camera_center_world = self.state.get_camera_center_world()
-        R_cam = self.state.get_R_cam()
+        R_cam = self.state.get_R_cw()
         P = self.state.get_P()
         base_world, apex = get_camera_pyramid(camera_center_world, R_cam, scale=0.5, depth=0.3)
         verts_pyramid = [
@@ -882,7 +993,7 @@ class MainWindow(QMainWindow):
 def run_app() -> None:
     app = QApplication(sys.argv)
     win = MainWindow()
-    win.show()
+    win.showMaximized()
     sys.exit(app.exec_())
 
 
