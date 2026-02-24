@@ -39,6 +39,37 @@ o --------→ X (right)
 ↓
 Y (down)
 
+
+remove zoom pan rotate code
+remove and forget about azimuth/elevation/roll
+make the camera 6 dof free by letting user set the pitch yaw roll
+still make the initial pose (pitch yaw roll) like the current (pitch 17 degrees looking to the (0,0,0)
+
+the translation vector t should have spin to adjust
+
+ ✅ Yaw (around Y axis, pointing down)
+
+Positive yaw = turn camera to the right
+
+i.e. looking to the right side of the scene
+
+✅ Pitch (around X axis, pointing right)
+
+Positive pitch = look down
+
+camera tilts downward
+
+✅ Roll (around Z axis, pointing forward)
+
+Positive roll = clockwise rotation in the image
+
+image rotates clockwise
+
+
+let the user set camera center C in world coordinate. because t is not easy to understand or perceive
+
+then make t only readable
+
 """
 
 from __future__ import annotations
@@ -93,6 +124,42 @@ def get_scene_triangle(width: float = 0.8, height: float = 1.0, x_plane: float =
 # Pinhole camera model
 # ---------------------------------------------------------------------------
 
+def R_cam_from_pitch_yaw_roll(pitch_deg: float, yaw_deg: float, roll_deg: float) -> np.ndarray:
+    """
+    Build R_cam (3x3) from pitch, yaw, roll in degrees.
+    World: X right, Y down, Z forward.
+    Yaw around Y (positive = turn right), pitch around X (positive = look down), roll around Z (positive = CW in image).
+    R_cam = R_z(roll) @ R_x(pitch) @ R_y(yaw); columns = camera axes in world.
+    """
+    p = np.radians(pitch_deg)
+    y = np.radians(yaw_deg)
+    r = np.radians(roll_deg)
+    cp, sp = np.cos(p), np.sin(p)
+    cy, sy = np.cos(y), np.sin(y)
+    cr, sr = np.cos(r), np.sin(r)
+    # R_y(yaw) around Y (down): yaw positive = turn right
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=np.float64)
+    # R_x(pitch) around X (right): pitch positive = look down
+    Rx = np.array([[1, 0, 0], [0, cp, sp], [0, -sp, cp]], dtype=np.float64)
+    # R_z(roll) around Z (forward): roll positive = image CW
+    Rz = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]], dtype=np.float64)
+    R_cam = Rz @ Rx @ Ry
+    return R_cam
+
+
+def pitch_yaw_roll_from_R(R_world_to_cam: np.ndarray) -> tuple[float, float, float]:
+    """Extract pitch_deg, yaw_deg, roll_deg from R_world_to_cam. R_cam = R_world_to_cam.T."""
+    R = R_world_to_cam.T
+    pitch_rad = np.arcsin(np.clip(R[2, 1], -1.0, 1.0))
+    cp = np.cos(pitch_rad)
+    if np.abs(cp) < 1e-9:
+        roll_rad = 0.0
+        yaw_rad = np.arctan2(-R[2, 0], R[2, 2])
+    else:
+        roll_rad = np.arctan2(-R[0, 1], R[1, 1])
+        yaw_rad = np.arctan2(-R[2, 0], R[2, 2])
+    return float(np.degrees(pitch_rad)), float(np.degrees(yaw_rad)), float(np.degrees(roll_rad))
+
 def build_intrinsic(
     focal_length_mm: float,
     sensor_width_mm: float,
@@ -118,30 +185,6 @@ def build_intrinsic(
         [0, fy_px, cy],
         [0, 0, 1],
     ], dtype=np.float64)
-
-
-def camera_pose_from_target(
-    camera_center_world: np.ndarray,
-    target: np.ndarray,
-    roll: float = 0.0,
-    world_up: np.ndarray | None = None,
-) -> np.ndarray:
-    """R_cam 3x3: columns are camera x, y, z axes in world. Camera frame: x=right, y=down, z=forward (view direction). roll (rad) rotates around view axis."""
-    if world_up is None:
-        world_up = np.array([0.0, 0.0, 1.0])
-    d = target - camera_center_world
-    d = d / (np.linalg.norm(d) + 1e-12)
-    forward = d  # cam z
-    right0 = np.cross(world_up, forward)
-    right0 = right0 / (np.linalg.norm(right0) + 1e-12)
-    up0 = np.cross(forward, right0)
-    up0 = up0 / (np.linalg.norm(up0) + 1e-12)
-    down0 = -up0
-    cr, sr = np.cos(roll), np.sin(roll)
-    right = cr * right0 - sr * up0
-    down = sr * right0 + cr * down0
-    R_cam = np.column_stack([right, down, forward])
-    return R_cam
 
 
 def build_projection_matrix(
@@ -172,26 +215,6 @@ def decompose_P(P: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         K_intrinsic = -K_intrinsic
     t_world_to_cam = np.linalg.solve(K_intrinsic, p)
     return K_intrinsic, R_world_to_cam, t_world_to_cam
-
-
-def rotation_to_angles(R_world_to_cam: np.ndarray) -> tuple[float, float, float]:
-    """Extract azimuth, elevation, roll (radians) from R_world_to_cam. Camera frame: x=right, y=down, z=forward."""
-    R_cam = R_world_to_cam.T
-    view = R_cam[:, 2]  # forward in world
-    az = np.arctan2(view[1], view[0])
-    el = np.arcsin(np.clip(view[2], -1.0, 1.0))
-    world_up = np.array([0.0, 0.0, 1.0])
-    right0 = np.cross(world_up, view)
-    n = np.linalg.norm(right0)
-    if n < 1e-10:
-        roll = 0.0
-    else:
-        right0 = right0 / n
-        down0 = -np.cross(view, right0)
-        down0 = down0 / (np.linalg.norm(down0) + 1e-12)
-        right = R_cam[:, 0]
-        roll = np.arctan2(np.dot(down0, right), np.dot(right0, right))
-    return az, el, roll
 
 
 def project_points(P: np.ndarray, points_world: np.ndarray) -> np.ndarray:
@@ -314,29 +337,20 @@ class CameraState:
         self.pixel_size_y_mm = pixel_size_y_mm
         self.cx_px_override: float | None = None
         self.cy_px_override: float | None = None
-        self.target = np.array([0.0, 0.0, 0.0])
-        self.distance = 4.0
-        self.azimuth = 0.0
-        self.elevation = 0.3
-        self.roll = 0.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-
-    def get_camera_center_world(self) -> np.ndarray:
-        r = self.distance
-        el = self.elevation
-        az = self.azimuth
-        cx = self.target[0] + self.pan_x + r * np.cos(el) * np.cos(az)
-        cy = self.target[1] + self.pan_y + r * np.cos(el) * np.sin(az)
-        cz = self.target[2] + r * np.sin(el)
-        return np.array([cx, cy, cz])
+        # 6-DOF pose: pitch/yaw/roll (degrees), camera center C in world (t = -R @ C)
+        self.pitch_deg = 17.0
+        self.yaw_deg = 0.0
+        self.roll_deg = 0.0
+        # Initial C so that with pitch=17° we get the same view as t=(0,0,-4): C = -R_cam.T @ t
+        self.C_x = 0.0
+        self.C_y = 4.0 * np.sin(np.radians(17.0))
+        self.C_z = 4.0 * np.cos(np.radians(17.0))
 
     def get_R_cam(self) -> np.ndarray:
-        return camera_pose_from_target(
-            self.get_camera_center_world(),
-            self.target + np.array([self.pan_x, self.pan_y, 0]),
-            roll=self.roll,
-        )
+        return R_cam_from_pitch_yaw_roll(self.pitch_deg, self.yaw_deg, self.roll_deg)
+
+    def get_camera_center_world(self) -> np.ndarray:
+        return np.array([self.C_x, self.C_y, self.C_z])
 
     def get_K(self) -> np.ndarray:
         return build_intrinsic(
@@ -356,24 +370,12 @@ class CameraState:
         return build_projection_matrix(K, R_cam, camera_center_world)
 
     def get_R_and_t(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return (R_world_to_cam, t_world_to_cam)."""
+        """Return (R_world_to_cam, t_world_to_cam). t = -R @ C."""
         R_cam = self.get_R_cam()
-        camera_center_world = self.get_camera_center_world()
         R_world_to_cam = R_cam.T
-        t_world_to_cam = (-R_world_to_cam @ camera_center_world).reshape(3, 1)
+        C = np.array([[self.C_x], [self.C_y], [self.C_z]])
+        t_world_to_cam = -R_world_to_cam @ C
         return R_world_to_cam, t_world_to_cam
-
-    def orbit(self, d_az: float, d_el: float) -> None:
-        self.azimuth += d_az
-        self.elevation = np.clip(self.elevation + d_el, -np.pi / 2 + 0.1, np.pi / 2 - 0.1)
-
-    def pan(self, dx: float, dy: float) -> None:
-        R_cam = self.get_R_cam()
-        self.pan_x += dx * R_cam[0, 0] + dy * R_cam[0, 1]
-        self.pan_y += dx * R_cam[1, 0] + dy * R_cam[1, 1]
-
-    def zoom(self, delta: float) -> None:
-        self.distance = np.clip(self.distance * (1.0 - delta), 0.5, 20.0)
 
     def set_from_K(self, K: np.ndarray) -> None:
         """Update focal_length_mm and principal point (px) from intrinsic matrix K. K[0,0]=fx_px, K[1,1]=fy_px."""
@@ -383,27 +385,18 @@ class CameraState:
         self.cx_px_override = float(K[0, 2])
         self.cy_px_override = float(K[1, 2])
 
-    def set_from_t(self, t_world_to_cam: np.ndarray) -> None:
-        """Update camera position (distance, azimuth, elevation) from t_world_to_cam; R from current angles."""
-        R_world_to_cam = self.get_R_cam().T
-        camera_center_world = -R_world_to_cam.T @ t_world_to_cam.ravel()
-        C = camera_center_world
-        eff_target = self.target + np.array([self.pan_x, self.pan_y, 0])
-        d = eff_target - C
-        self.distance = float(np.linalg.norm(d) + 1e-12)
-        if self.distance > 1e-12:
-            view = d / self.distance
-            self.azimuth = float(np.arctan2(view[1], view[0]))
-            self.elevation = float(np.arcsin(np.clip(view[2], -1.0, 1.0)))
+    def set_from_C(self, C_world: np.ndarray) -> None:
+        """Set camera center in world from 3-vector."""
+        C = np.asarray(C_world).ravel()[:3]
+        self.C_x, self.C_y, self.C_z = float(C[0]), float(C[1]), float(C[2])
 
     def set_from_P(self, P: np.ndarray) -> None:
-        """Update state from full P: decompose to K, R_world_to_cam, t_world_to_cam; set intrinsics and pose from angles."""
+        """Update state from full P: decompose to K, R, t; set pitch/yaw/roll and C (from t)."""
         K_intrinsic, R_world_to_cam, t_world_to_cam = decompose_P(P)
         self.set_from_K(K_intrinsic)
-        self.azimuth, self.elevation, self.roll = rotation_to_angles(R_world_to_cam)
-        C = -R_world_to_cam.T @ t_world_to_cam.ravel()
-        self.distance = float(np.linalg.norm(C) + 1e-12)
-        self.pan_x, self.pan_y = 0.0, 0.0
+        self.pitch_deg, self.yaw_deg, self.roll_deg = pitch_yaw_roll_from_R(R_world_to_cam)
+        C = (-R_world_to_cam.T @ t_world_to_cam).ravel()[:3]
+        self.C_x, self.C_y, self.C_z = float(C[0]), float(C[1]), float(C[2])
 
 
 # ---------------------------------------------------------------------------
@@ -414,8 +407,11 @@ def _fmt(x: float) -> str:
     return f"{x:.4f}"
 
 
+READONLY_BG = "background-color: #e0e0e0;"
+
+
 class MatrixDisplayWidget(QWidget):
-    """Read-only grid of QLineEdit for displaying a matrix (e.g. P 3x4, A/R 3x3, t 3x1)."""
+    """Read-only grid with gray background so user can see at a glance it is not editable."""
 
     def __init__(self, title: str, nrows: int, ncols: int):
         super().__init__()
@@ -431,6 +427,7 @@ class MatrixDisplayWidget(QWidget):
             for j in range(ncols):
                 edit = QLineEdit()
                 edit.setReadOnly(True)
+                edit.setStyleSheet(READONLY_BG)
                 edit.setMaximumWidth(72)
                 edit.setAlignment(Qt.AlignRight)
                 grid.addWidget(edit, i, j)
@@ -508,7 +505,7 @@ class MatrixEditWidget(QWidget):
 
 
 class CameraParamsWidget(QWidget):
-    """Editable f, physical/pixel size, distance, azimuth, elevation, roll with spinboxes."""
+    """Editable intrinsics only (focal_length_mm, sensor_*, pixel_*)."""
 
     def __init__(self, state: CameraState):
         super().__init__()
@@ -561,40 +558,6 @@ class CameraParamsWidget(QWidget):
         self.spin_hpix.setValue(state.pixel_size_y_mm)
         self.spin_hpix.setMaximumWidth(90)
         grid.addWidget(self.spin_hpix, row, 1)
-        row += 1
-        grid.addWidget(QLabel("distance:"), row, 0)
-        self.spin_dist = QDoubleSpinBox()
-        self.spin_dist.setRange(0.5, 50.0)
-        self.spin_dist.setValue(state.distance)
-        self.spin_dist.setMaximumWidth(90)
-        grid.addWidget(self.spin_dist, row, 1)
-        row += 1
-        grid.addWidget(QLabel("azimuth (°):"), row, 0)
-        self.spin_az = QDoubleSpinBox()
-        self.spin_az.setRange(-360.0, 360.0)
-        self.spin_az.setDecimals(1)
-        self.spin_az.setSuffix(" °")
-        self.spin_az.setValue(np.degrees(state.azimuth))
-        self.spin_az.setMaximumWidth(90)
-        grid.addWidget(self.spin_az, row, 1)
-        row += 1
-        grid.addWidget(QLabel("elevation (°):"), row, 0)
-        self.spin_el = QDoubleSpinBox()
-        self.spin_el.setRange(-90.0, 90.0)
-        self.spin_el.setDecimals(1)
-        self.spin_el.setSuffix(" °")
-        self.spin_el.setValue(np.degrees(state.elevation))
-        self.spin_el.setMaximumWidth(90)
-        grid.addWidget(self.spin_el, row, 1)
-        row += 1
-        grid.addWidget(QLabel("roll (°):"), row, 0)
-        self.spin_roll = QDoubleSpinBox()
-        self.spin_roll.setRange(-180.0, 180.0)
-        self.spin_roll.setDecimals(1)
-        self.spin_roll.setSuffix(" °")
-        self.spin_roll.setValue(np.degrees(state.roll))
-        self.spin_roll.setMaximumWidth(90)
-        grid.addWidget(self.spin_roll, row, 1)
         layout.addLayout(grid)
         group.setLayout(layout)
         main = QVBoxLayout()
@@ -607,39 +570,120 @@ class CameraParamsWidget(QWidget):
         self.state.sensor_height_mm = self.spin_hphys.value()
         self.state.pixel_size_x_mm = self.spin_wpix.value()
         self.state.pixel_size_y_mm = self.spin_hpix.value()
-        self.state.distance = self.spin_dist.value()
-        self.state.azimuth = np.radians(self.spin_az.value())
-        self.state.elevation = np.radians(self.spin_el.value())
-        self.state.roll = np.radians(self.spin_roll.value())
 
     def sync_from_state(self) -> None:
-        self.spin_f.blockSignals(True)
-        self.spin_wphys.blockSignals(True)
-        self.spin_hphys.blockSignals(True)
-        self.spin_wpix.blockSignals(True)
-        self.spin_hpix.blockSignals(True)
-        self.spin_dist.blockSignals(True)
-        self.spin_az.blockSignals(True)
-        self.spin_el.blockSignals(True)
-        self.spin_roll.blockSignals(True)
+        for spin in (self.spin_f, self.spin_wphys, self.spin_hphys, self.spin_wpix, self.spin_hpix):
+            spin.blockSignals(True)
         self.spin_f.setValue(self.state.focal_length_mm)
         self.spin_wphys.setValue(self.state.sensor_width_mm)
         self.spin_hphys.setValue(self.state.sensor_height_mm)
         self.spin_wpix.setValue(self.state.pixel_size_x_mm)
         self.spin_hpix.setValue(self.state.pixel_size_y_mm)
-        self.spin_dist.setValue(self.state.distance)
-        self.spin_az.setValue(np.degrees(self.state.azimuth))
-        self.spin_el.setValue(np.degrees(self.state.elevation))
-        self.spin_roll.setValue(np.degrees(self.state.roll))
-        self.spin_f.blockSignals(False)
-        self.spin_wphys.blockSignals(False)
-        self.spin_hphys.blockSignals(False)
-        self.spin_wpix.blockSignals(False)
-        self.spin_hpix.blockSignals(False)
-        self.spin_dist.blockSignals(False)
-        self.spin_az.blockSignals(False)
-        self.spin_el.blockSignals(False)
-        self.spin_roll.blockSignals(False)
+        for spin in (self.spin_f, self.spin_wphys, self.spin_hphys, self.spin_wpix, self.spin_hpix):
+            spin.blockSignals(False)
+
+
+class RotationParamsWidget(QWidget):
+    """Pitch, yaw, roll (°): one row per label+spin, spins in a column."""
+
+    def __init__(self, state: CameraState):
+        super().__init__()
+        self.state = state
+        group = QGroupBox("Pitch / Yaw / Roll")
+        group.setFont(QFont("Arial", 10, QFont.Bold))
+        grid = QGridLayout()
+        grid.addWidget(QLabel("pitch:"), 0, 0)
+        self.spin_pitch = QDoubleSpinBox()
+        self.spin_pitch.setRange(-90.0, 90.0)
+        self.spin_pitch.setDecimals(1)
+        self.spin_pitch.setSuffix(" °")
+        self.spin_pitch.setValue(state.pitch_deg)
+        self.spin_pitch.setMaximumWidth(72)
+        grid.addWidget(self.spin_pitch, 0, 1)
+        grid.addWidget(QLabel("yaw:"), 1, 0)
+        self.spin_yaw = QDoubleSpinBox()
+        self.spin_yaw.setRange(-360.0, 360.0)
+        self.spin_yaw.setDecimals(1)
+        self.spin_yaw.setSuffix(" °")
+        self.spin_yaw.setValue(state.yaw_deg)
+        self.spin_yaw.setMaximumWidth(72)
+        grid.addWidget(self.spin_yaw, 1, 1)
+        grid.addWidget(QLabel("roll:"), 2, 0)
+        self.spin_roll = QDoubleSpinBox()
+        self.spin_roll.setRange(-180.0, 180.0)
+        self.spin_roll.setDecimals(1)
+        self.spin_roll.setSuffix(" °")
+        self.spin_roll.setValue(state.roll_deg)
+        self.spin_roll.setMaximumWidth(72)
+        grid.addWidget(self.spin_roll, 2, 1)
+        group.setLayout(grid)
+        main = QVBoxLayout()
+        main.addWidget(group)
+        self.setLayout(main)
+
+    def apply_to_state(self) -> None:
+        self.state.pitch_deg = self.spin_pitch.value()
+        self.state.yaw_deg = self.spin_yaw.value()
+        self.state.roll_deg = self.spin_roll.value()
+
+    def sync_from_state(self) -> None:
+        for spin in (self.spin_pitch, self.spin_yaw, self.spin_roll):
+            spin.blockSignals(True)
+        self.spin_pitch.setValue(self.state.pitch_deg)
+        self.spin_yaw.setValue(self.state.yaw_deg)
+        self.spin_roll.setValue(self.state.roll_deg)
+        for spin in (self.spin_pitch, self.spin_yaw, self.spin_roll):
+            spin.blockSignals(False)
+
+
+class CameraCenterWidget(QWidget):
+    """Camera center C in world: C_x, C_y, C_z as spinboxes for click adjustment."""
+
+    def __init__(self, state: CameraState):
+        super().__init__()
+        self.state = state
+        group = QGroupBox("C (world)")
+        group.setFont(QFont("Arial", 10, QFont.Bold))
+        grid = QGridLayout()
+        grid.addWidget(QLabel("C_x:"), 0, 0)
+        self.spin_Cx = QDoubleSpinBox()
+        self.spin_Cx.setRange(-100.0, 100.0)
+        self.spin_Cx.setDecimals(3)
+        self.spin_Cx.setValue(state.C_x)
+        self.spin_Cx.setMaximumWidth(72)
+        grid.addWidget(self.spin_Cx, 0, 1)
+        grid.addWidget(QLabel("C_y:"), 1, 0)
+        self.spin_Cy = QDoubleSpinBox()
+        self.spin_Cy.setRange(-100.0, 100.0)
+        self.spin_Cy.setDecimals(3)
+        self.spin_Cy.setValue(state.C_y)
+        self.spin_Cy.setMaximumWidth(72)
+        grid.addWidget(self.spin_Cy, 1, 1)
+        grid.addWidget(QLabel("C_z:"), 2, 0)
+        self.spin_Cz = QDoubleSpinBox()
+        self.spin_Cz.setRange(-100.0, 100.0)
+        self.spin_Cz.setDecimals(3)
+        self.spin_Cz.setValue(state.C_z)
+        self.spin_Cz.setMaximumWidth(72)
+        grid.addWidget(self.spin_Cz, 2, 1)
+        group.setLayout(grid)
+        main = QVBoxLayout()
+        main.addWidget(group)
+        self.setLayout(main)
+
+    def apply_to_state(self) -> None:
+        self.state.C_x = self.spin_Cx.value()
+        self.state.C_y = self.spin_Cy.value()
+        self.state.C_z = self.spin_Cz.value()
+
+    def sync_from_state(self) -> None:
+        for spin in (self.spin_Cx, self.spin_Cy, self.spin_Cz):
+            spin.blockSignals(True)
+        self.spin_Cx.setValue(self.state.C_x)
+        self.spin_Cy.setValue(self.state.C_y)
+        self.spin_Cz.setValue(self.state.C_z)
+        for spin in (self.spin_Cx, self.spin_Cy, self.spin_Cz):
+            spin.blockSignals(False)
 
 
 class MainWindow(QMainWindow):
@@ -648,13 +692,10 @@ class MainWindow(QMainWindow):
         self.square_pts = get_scene_square(1.0, 0.0)
         self.triangle_pts = get_scene_triangle(0.8, 1.0, 1.5)
         self.state = CameraState()
-        self.last_xy = [0.0, 0.0]
-        self.dragging = {"orbit": False, "pan": False, "zoom": False}
-        self.modifier_alt = False
         self.init_ui()
 
     def init_ui(self) -> None:
-        self.setWindowTitle("Camera simulation (P = A [R|t])")
+        self.setWindowTitle("Camera simulation (P = K [R|t])")
         self.setGeometry(80, 80, 1400, 700)
         central = QWidget()
         self.setCentralWidget(central)
@@ -679,10 +720,6 @@ class MainWindow(QMainWindow):
             self.params_widget.spin_hphys,
             self.params_widget.spin_wpix,
             self.params_widget.spin_hpix,
-            self.params_widget.spin_dist,
-            self.params_widget.spin_az,
-            self.params_widget.spin_el,
-            self.params_widget.spin_roll,
         ):
             spin.valueChanged.connect(self._on_params_changed)
         right_layout.addWidget(self.params_widget)
@@ -692,112 +729,71 @@ class MainWindow(QMainWindow):
         self.edit_K = MatrixEditWidget("K intrinsic (3×3) editable", 3, 3)
         self.edit_K.matrix_changed.connect(self._on_K_changed)
         right_layout.addWidget(self.edit_K)
-        self.display_R = MatrixDisplayWidget("R_world_to_cam (3×3) from angles", 3, 3)
+        self.display_R = MatrixDisplayWidget("R", 3, 3)
         right_layout.addWidget(self.display_R)
-        self.edit_t = MatrixEditWidget("t_world_to_cam (3×1) editable", 3, 1)
-        self.edit_t.matrix_changed.connect(self._on_t_changed)
-        right_layout.addWidget(self.edit_t)
+        pose_row = QWidget()
+        pose_row_layout = QHBoxLayout()
+        pose_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.rotation_widget = RotationParamsWidget(self.state)
+        for spin in (
+            self.rotation_widget.spin_pitch,
+            self.rotation_widget.spin_yaw,
+            self.rotation_widget.spin_roll,
+        ):
+            spin.valueChanged.connect(self._on_pose_changed)
+        pose_row_layout.addWidget(self.rotation_widget)
+        self.C_widget = CameraCenterWidget(self.state)
+        for spin in (self.C_widget.spin_Cx, self.C_widget.spin_Cy, self.C_widget.spin_Cz):
+            spin.valueChanged.connect(self._on_pose_changed)
+        pose_row_layout.addWidget(self.C_widget)
+        self.display_t = MatrixDisplayWidget("t = -R@C", 3, 1)
+        pose_row_layout.addWidget(self.display_t)
+        pose_row_layout.addStretch()
+        pose_row.setLayout(pose_row_layout)
+        right_layout.addWidget(pose_row)
         right_layout.addStretch()
         scroll_widget.setLayout(right_layout)
         scroll.setWidget(scroll_widget)
         main_layout.addWidget(scroll, 1)
         central.setLayout(main_layout)
 
-        # Modifier key tracking (matplotlib MouseEvent has no .alt)
-        self.fig.canvas.mpl_connect("key_press_event", self._on_key_press)
-        self.fig.canvas.mpl_connect("key_release_event", self._on_key_release)
-        self.fig.canvas.mpl_connect("button_press_event", self._on_mouse_press)
-        self.fig.canvas.mpl_connect("button_release_event", self._on_mouse_release)
-        self.fig.canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
-        self.fig.canvas.mpl_connect("scroll_event", self._on_scroll)
-
-        self._draw_all()
-
-    def _on_key_press(self, event) -> None:
-        if getattr(event, "key", None) == "alt":
-            self.modifier_alt = True
-
-    def _on_key_release(self, event) -> None:
-        if getattr(event, "key", None) == "alt":
-            self.modifier_alt = False
-        self.dragging["orbit"] = False
-        self.dragging["pan"] = False
-        self.dragging["zoom"] = False
-
-    def _on_mouse_press(self, event) -> None:
-        if event.inaxes != self.ax_img:
-            return
-        if self.modifier_alt and event.button == 1:
-            self.dragging["orbit"] = True
-        elif (self.modifier_alt and event.button == 2) or (
-            self.modifier_alt and event.button == 1 and getattr(event, "key", None) == "shift"
-        ):
-            self.dragging["pan"] = True
-        elif self.modifier_alt and event.button == 3:
-            self.dragging["zoom"] = True
-        self.last_xy[0] = event.xdata or 0
-        self.last_xy[1] = event.ydata or 0
-
-    def _on_mouse_release(self, event) -> None:
-        self.dragging["orbit"] = False
-        self.dragging["pan"] = False
-        self.dragging["zoom"] = False
-
-    def _on_mouse_move(self, event) -> None:
-        if event.inaxes != self.ax_img or event.xdata is None or event.ydata is None:
-            return
-        dx = (event.xdata - self.last_xy[0]) / self.image_width_px
-        dy = (event.ydata - self.last_xy[1]) / self.image_height_px
-        self.last_xy[0], self.last_xy[1] = event.xdata, event.ydata
-        if self.dragging["orbit"]:
-            self.state.orbit(-dx * 4, dy * 2)
-            self.params_widget.sync_from_state()
-            self._draw_all()
-        elif self.dragging["pan"]:
-            self.state.pan(-dx * 2, -dy * 2)
-            self.params_widget.sync_from_state()
-            self._draw_all()
-        elif self.dragging["zoom"]:
-            self.state.zoom(dy * 2)
-            self.params_widget.sync_from_state()
-            self._draw_all()
-
-    def _on_scroll(self, event) -> None:
-        if event.inaxes != self.ax_img:
-            return
-        self.state.zoom(0.15 if event.step > 0 else -0.15)
-        self.params_widget.sync_from_state()
+        self._update_matrix_displays()
         self._draw_all()
 
     def _on_params_changed(self) -> None:
         self.params_widget.apply_to_state()
+        self._update_matrix_displays()
+        self._draw_all()
+
+    def _on_pose_changed(self) -> None:
+        self.rotation_widget.apply_to_state()
+        self.C_widget.apply_to_state()
+        self._update_matrix_displays()
         self._draw_all()
 
     def _on_P_changed(self, P: np.ndarray) -> None:
         try:
-            self.state.set_from_P(P.reshape(3, 4))
-            self.params_widget.sync_from_state()
-            self._update_matrix_displays()
-            self._draw_all()
+            P = np.asarray(P).reshape(3, 4)
+            if not np.allclose(P, self.state.get_P(), rtol=1e-9, atol=1e-12):
+                self.state.set_from_P(P)
+                self.params_widget.sync_from_state()
+                self.rotation_widget.sync_from_state()
+                self.C_widget.sync_from_state()
+                self._update_matrix_displays()
+                self._draw_all()
         except Exception:
             pass
 
     def _on_K_changed(self, K: np.ndarray) -> None:
         try:
-            self.state.set_from_K(K.reshape(3, 3))
-            self.params_widget.sync_from_state()
-            self._update_matrix_displays()
-            self._draw_all()
-        except Exception:
-            pass
-
-    def _on_t_changed(self, t: np.ndarray) -> None:
-        try:
-            t_flat = np.asarray(t).ravel()
-            self.state.set_from_t(t_flat[:3])
-            self.params_widget.sync_from_state()
-            self._update_matrix_displays()
-            self._draw_all()
+            K = np.asarray(K).reshape(3, 3)
+            if not np.allclose(K, self.state.get_K(), rtol=1e-9, atol=1e-12):
+                self.state.set_from_K(K)
+                self.params_widget.sync_from_state()
+                self.rotation_widget.sync_from_state()
+                self.C_widget.sync_from_state()
+                self._update_matrix_displays()
+                self._draw_all()
         except Exception:
             pass
 
@@ -808,7 +804,8 @@ class MainWindow(QMainWindow):
         self.edit_P.set_matrix(P)
         self.edit_K.set_matrix(K)
         self.display_R.set_matrix(R_world_to_cam)
-        self.edit_t.set_matrix(t_world_to_cam)
+        self.C_widget.sync_from_state()
+        self.display_t.set_matrix(t_world_to_cam)
 
     def _draw_all(self) -> None:
         self.image_width_px = max(1, int(self.state.sensor_width_mm / self.state.pixel_size_x_mm))
