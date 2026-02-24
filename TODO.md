@@ -1,0 +1,3 @@
+- ch4 LM iteration
+- ch5 error analysis
+- 
