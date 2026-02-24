@@ -73,6 +73,9 @@ World is X right, Y forward, Z up. Camera default (zero angles) looks along -Y (
 R_base aligns camera frame (optical axis, image Y down) with world; then pitch, yaw, roll are applied.
 Pitch is relative to the world horizontal (xy) plane.
 
+# vanishing point
+
+the three column of R is the vanishing points of the three axes in the world coordinate system. show in the image plot if they are finite and visible in the image. use RGB colors for these three points corresponding to the X Y Z axes
 
 """
 
@@ -427,6 +430,46 @@ def draw_projected_scene(
     poly_tri = Polygon(tri_uv, facecolor="red", edgecolor="darkred", alpha=0.8)
     ax.add_patch(poly_sq)
     ax.add_patch(poly_tri)
+
+
+def vanishing_points_from_R_cw(K: np.ndarray, R_cw: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    """
+    Vanishing points of world X, Y, Z axes. R_cw = R_world_to_cam; columns are world axes in camera frame.
+    Returns (uv_X, uv_Y, uv_Z) each (2,) or None if not finite (direction parallel to image plane or behind).
+    """
+    uv = []
+    for i in range(3):
+        d_cam = R_cw[:, i]
+        x = K @ d_cam
+        if abs(x[2]) <= 1e-6:
+            uv.append(None)
+            continue
+        u, v = x[0] / x[2], x[1] / x[2]
+        uv.append(np.array([u, v]))
+    return uv[0], uv[1], uv[2]
+
+def draw_vanishing_points(
+    ax,
+    K: np.ndarray,
+    R_cw: np.ndarray,
+    img_width: float,
+    img_height: float,
+    margin: float = 50.0,
+) -> None:
+    """
+    Draw vanishing points for world X (R), Y (G), Z (B) on the image axes if finite and visible.
+    """
+    vp_x, vp_y, vp_z = vanishing_points_from_R_cw(K, R_cw)
+    def in_bounds(u: float, v: float) -> bool:
+        return (-margin <= u <= img_width + margin) and (-margin <= v <= img_height + margin)
+    for uv, color, label in [(vp_x, "red", "X"), (vp_y, "green", "Y"), (vp_z, "blue", "Z")]:
+        if uv is None:
+            continue
+        u, v = uv[0], uv[1]
+        if not in_bounds(u, v):
+            continue
+        ax.scatter(u, v, c=color, s=80, zorder=5, edgecolors="white", linewidths=1.5)
+        ax.annotate(label, (u, v), xytext=(5, 5), textcoords="offset points", color=color, fontsize=10, fontweight="bold")
 
 
 # ---------------------------------------------------------------------------
@@ -982,6 +1025,10 @@ class MainWindow(QMainWindow):
         self.ax3d.set_box_aspect((rx, ry, rz))
         draw_projected_scene(
             self.ax_img, P, self.square_pts, self.triangle_pts, self.image_width_px, self.image_height_px
+        )
+        K = self.state.get_K()
+        draw_vanishing_points(
+            self.ax_img, K, R_cam, self.image_width_px, self.image_height_px
         )
         self.ax_img.set_title("Image")
         self.ax_img.set_xlabel("u (pixels)")
