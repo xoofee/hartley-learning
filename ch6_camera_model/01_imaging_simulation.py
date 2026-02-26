@@ -25,8 +25,6 @@ dynamically update the image and the P R t
 
 note: we do not use any opengl or maya or blender or any 3d software to generate the image. we use pure python code to do it
 
-do not remove this comment.
-
 coordinate (world: X right, Y forward, Z up, ENU-like):
 
     ↑ Z (up)
@@ -76,6 +74,14 @@ Pitch is relative to the world horizontal (xy) plane.
 # vanishing point
 
 the three column of R is the vanishing points of the three axes in the world coordinate system. show in the image plot if they are finite and visible in the image. use RGB colors for these three points corresponding to the X Y Z axes
+
+# world origin
+add a point in the 3d plot to represent the world origin (0,0,0). use purple color.
+the last column of P is the world origin image point. show it in the image plot in purple if it is finite and visible in the image.
+
+world origin relative to the camera center is -C and -RC is t which is the world origin in camera coordinate system
+
+do not remove this comment.
 
 """
 
@@ -491,6 +497,41 @@ def draw_vanishing_points(
             continue
         ax.scatter(u, v, c=color, s=80, zorder=5, edgecolors="white", linewidths=1.5)
         ax.annotate(label, (u, v), xytext=(5, 5), textcoords="offset points", color=color, fontsize=10, fontweight="bold")
+
+
+def world_origin_image_point(P: np.ndarray) -> np.ndarray | None:
+    """
+    Image (u, v) of world origin from P: P @ [0,0,0,1] = P[:, 3].
+    Returns (2,) uv or None if not finite (e.g. behind camera).
+    """
+    p = P[:, 3]
+    if abs(p[2]) <= 1e-6:
+        return None
+    u, v = p[0] / p[2], p[1] / p[2]
+    if not (np.isfinite(u) and np.isfinite(v)):
+        return None
+    # In front of camera
+    if p[2] <= 0:
+        return None
+    return np.array([u, v])
+
+
+def draw_world_origin_on_image(
+    ax,
+    P: np.ndarray,
+    img_width: float,
+    img_height: float,
+    margin: float = 50.0,
+) -> None:
+    """Draw world origin image point in purple if finite and visible."""
+    uv = world_origin_image_point(P)
+    if uv is None:
+        return
+    u, v = uv[0], uv[1]
+    if not ((-margin <= u <= img_width + margin) and (-margin <= v <= img_height + margin)):
+        return
+    ax.scatter(u, v, c="purple", s=80, zorder=5, edgecolors="white", linewidths=1.5)
+    ax.annotate("O", (u, v), xytext=(5, 5), textcoords="offset points", color="purple", fontsize=10, fontweight="bold")
 
 
 # ---------------------------------------------------------------------------
@@ -1034,6 +1075,8 @@ class MainWindow(QMainWindow):
         self.ax3d.scatter(
             self.rectangle_pts[:, 0], self.rectangle_pts[:, 1], self.rectangle_pts[:, 2], c="blue", s=20
         )
+        # World origin
+        self.ax3d.scatter([0], [0], [0], c="purple", s=80, zorder=5, edgecolors="white", linewidths=1.5)
         sq_edges = np.vstack([self.square_pts, self.square_pts[0:1]])
         tri_edges = np.vstack([self.triangle_pts, self.triangle_pts[0:1]])
         rect_edges = np.vstack([self.rectangle_pts, self.rectangle_pts[0:1]])
@@ -1057,6 +1100,9 @@ class MainWindow(QMainWindow):
         K = self.state.get_K()
         draw_vanishing_points(
             self.ax_img, K, R_cam, self.image_width_px, self.image_height_px
+        )
+        draw_world_origin_on_image(
+            self.ax_img, P, self.image_width_px, self.image_height_px
         )
         self.ax_img.set_title("Image")
         self.ax_img.set_xlabel("u (pixels)")
