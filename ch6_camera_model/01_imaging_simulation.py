@@ -81,12 +81,23 @@ the last column of P is the world origin image point. show it in the image plot 
 
 world origin relative to the camera center is -C and -RC is t which is the world origin in camera coordinate system
 
-do not remove this comment.
-
 # row planes
-show 3 three planes in the 3d view (reactively)
-the planes are three rows of P
-add a switch in the right pane to control the visibility. default unchecked
+    - P1 P2 plane corresponds to x=0 y=0 image lines
+    - P3 z=0 images, Principal plane
+
+    show 3 three planes in the 3d view (reactively)
+    the planes are three rows of P
+    add a switch in the right pane to control the visibility. default unchecked
+
+# backprojecting
+
+- state switch. A switch on the right pane to control the backprojecting. default unchecked
+- when switch is on. The user can drag an image point on the image plot, then show a backprojected line in the 3d view
+The initial image point should be at the center of the image.
+
+note, in the future we may add zoom pan rotate feature in the image plot to move the camera. But not now. So make the code clean and modular and flexible to add these features later.
+
+do not remove this comment.
 
 """
 
@@ -370,6 +381,31 @@ def project_points(P: np.ndarray, points_world: np.ndarray) -> np.ndarray:
     u = x[:, 0] / w
     v = x[:, 1] / w
     return np.column_stack([u, v])
+
+
+def backproject_image_point_to_ray(
+    u: float,
+    v: float,
+    K: np.ndarray,
+    R_cw: np.ndarray,
+    t_world_to_cam: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Backproject image point (u, v) in pixel coords to a 3D ray in world coordinates.
+    P = K [R|t], R = R_world_to_cam, t = -R @ C.
+    Returns (C, d) where C is camera center, d is normalized ray direction (both in world coords).
+    Ray: X(λ) = C + λ * d for λ > 0.
+    """
+    x_h = np.array([u, v, 1.0])
+    d_cam = np.linalg.solve(K, x_h)
+    d_world = R_cw.T @ d_cam
+    d_norm = np.linalg.norm(d_world)
+    if d_norm < 1e-12:
+        d_world = np.array([0.0, 0.0, 1.0])  # fallback
+    else:
+        d_world = d_world / d_norm
+    C = (-R_cw.T @ t_world_to_cam).ravel()[:3]
+    return C, d_world
 
 
 def get_camera_pyramid(
@@ -1058,14 +1094,66 @@ class MainWindow(QMainWindow):
         self.check_show_P_planes.setChecked(False)
         self.check_show_P_planes.stateChanged.connect(self._draw_all)
         right_layout.addWidget(self.check_show_P_planes)
+        self.check_backproject = QCheckBox("Backproject (drag image point)")
+        self.check_backproject.setChecked(False)
+        self.check_backproject.stateChanged.connect(self._on_backproject_toggled)
+        right_layout.addWidget(self.check_backproject)
         right_layout.addStretch()
         scroll_widget.setLayout(right_layout)
         scroll.setWidget(scroll_widget)
         main_layout.addWidget(scroll, 0)
         central.setLayout(main_layout)
 
+        self._backproject_point_uv: tuple[float, float] | None = None
+        self._backproject_dragging = False
+        self._backproject_cids: list[int] = []
         self._update_matrix_displays()
         self._draw_all()
+
+    def _init_backproject_point(self) -> None:
+        """Set backproject point to image center (principal point)."""
+        K = self.state.get_K()
+        cx, cy = float(K[0, 2]), float(K[1, 2])
+        self._backproject_point_uv = (cx, cy)
+
+    def _connect_image_plot_events(self) -> None:
+        """Connect mouse events to image plot for backproject drag. Modular for future zoom/pan/rotate."""
+        self._disconnect_image_plot_events()
+        cid1 = self.canvas.mpl_connect("button_press_event", self._on_image_plot_button_press)
+        cid2 = self.canvas.mpl_connect("motion_notify_event", self._on_image_plot_motion)
+        cid3 = self.canvas.mpl_connect("button_release_event", self._on_image_plot_button_release)
+        self._backproject_cids = [cid1, cid2, cid3]
+
+    def _disconnect_image_plot_events(self) -> None:
+        """Disconnect image plot mouse events."""
+        for cid in self._backproject_cids:
+            self.canvas.mpl_disconnect(cid)
+        self._backproject_cids = []
+
+    def _on_backproject_toggled(self) -> None:
+        if self.check_backproject.isChecked():
+            if self._backproject_point_uv is None:
+                self._init_backproject_point()
+            self._connect_image_plot_events()
+        else:
+            self._disconnect_image_plot_events()
+        self._draw_all()
+
+    def _on_image_plot_button_press(self, event) -> None:
+        if not self.check_backproject.isChecked() or event.inaxes != self.ax_img:
+            return
+        self._backproject_dragging = True
+
+    def _on_image_plot_motion(self, event) -> None:
+        if not self.check_backproject.isChecked() or not self._backproject_dragging or event.inaxes != self.ax_img:
+            return
+        if event.xdata is not None and event.ydata is not None:
+            self._backproject_point_uv = (float(event.xdata), float(event.ydata))
+            self._draw_all()
+
+    def _on_image_plot_button_release(self, event) -> None:
+        if self.check_backproject.isChecked():
+            self._backproject_dragging = False
 
     def _set_3d_axes_limits_once(self) -> None:
         """Set 3D scene axis limits and equal box aspect once at init. User zoom/pan changes limits; we preserve them on redraw."""
@@ -1192,6 +1280,18 @@ class MainWindow(QMainWindow):
         draw_world_origin_on_image(
             self.ax_img, P, self.image_width_px, self.image_height_px
         )
+        if self.check_backproject.isChecked() and self._backproject_point_uv is not None:
+            u, v = self._backproject_point_uv
+            self.ax_img.scatter(u, v, c="orange", s=100, zorder=10, edgecolors="white", linewidths=2)
+            R_cw, t = self.state.get_R_and_t()
+            K = self.state.get_K()
+            C, d = backproject_image_point_to_ray(u, v, K, R_cw, t)
+            ray_scale = 8.0
+            pt_far = C + ray_scale * d
+            self.ax3d.plot(
+                [C[0], pt_far[0]], [C[1], pt_far[1]], [C[2], pt_far[2]],
+                "o-", color="orange", linewidth=2, markersize=6
+            )
         self.ax_img.set_title("Image")
         self.ax_img.set_xlabel("u (pixels)")
         self.ax_img.set_ylabel("v (pixels)")
