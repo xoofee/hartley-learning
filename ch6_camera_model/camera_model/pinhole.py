@@ -89,10 +89,17 @@ def project_one(P: np.ndarray, point_world: np.ndarray) -> tuple[float, float, f
 
 
 def _affine_P(P: np.ndarray) -> np.ndarray:
-    """Return 3x4 affine projection matrix: first two rows of P, third row [0,0,0,1] (telecentric)."""
-    P_affine = P.copy()
-    # P_affine[2, :] = [0.0, 0.0, 0.0, 1.0]
-    P_affine[2, :3] = [0.0, 0.0, 0.0]
+    """
+    Return 3x4 affine (telecentric) projection matrix by zeroing the last row of R,
+    not the last row of P. So P_affine = K [R_affine | t] with R_affine[2,:] = 0.
+    Then Z_cam = t[2] is constant and (cx, cy) no longer couple Z into (u,v).
+    """
+    K, R_world_to_cam, t_world_to_cam = decompose_P(P)
+    R_affine = R_world_to_cam.copy()
+    R_affine[2, :] = 0.0
+    Rt_affine = np.hstack([R_affine, t_world_to_cam.reshape(3, 1)])
+
+    P_affine = K @ Rt_affine
 
     print('P:', P)
     print('P_affine:', P_affine)
@@ -102,18 +109,29 @@ def _affine_P(P: np.ndarray) -> np.ndarray:
 
 def project_points_affine(P: np.ndarray, points_world: np.ndarray) -> np.ndarray:
     """
-    Affine (telecentric) projection: (u, v) = (row0·X, row1·X), no division by depth.
-    points_world (N, 3) -> (N, 2). Uses P with third row forced to [0,0,0,1].
+    Affine (telecentric) projection: Z_cam is constant (last row of R zeroed),
+    so (u, v) = (x0/x2, x1/x2) with x2 = t[2] constant — linear in world coords.
+    points_world (N, 3) -> (N, 2).
     """
     P_affine = _affine_P(P)
     n = points_world.shape[0]
     hom = np.hstack([points_world, np.ones((n, 1))])
     x = (P_affine @ hom.T).T
-    return np.column_stack([x[:, 0], x[:, 1]])
+    w = x[:, 2]
+    w = np.where(np.abs(w) < 1e-12, 1e-12, w)
+    u = x[:, 0] / w
+    v = x[:, 1] / w
+
+    return np.column_stack([u, v])
 
 
 def project_one_affine(P: np.ndarray, point_world: np.ndarray) -> tuple[float, float, float]:
-    """Affine projection for one point; returns (u, v, 1.0) for API compatibility."""
+    """Affine projection for one point; returns (u, v, w) with w = t[2] constant."""
     P_affine = _affine_P(P)
     x = P_affine @ np.append(point_world, 1.0)
-    return float(x[0]), float(x[1]), 1.0
+    w = float(x[2])
+    if abs(w) < 1e-12:
+        w = 1e-12
+    u = x[0] / w
+    v = x[1] / w
+    return float(u), float(v), w

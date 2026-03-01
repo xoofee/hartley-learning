@@ -99,8 +99,6 @@ def draw_projected_scene(
     if len(rect_uv) >= 3:
         ax.add_patch(Polygon(rect_uv, facecolor="blue", edgecolor="darkblue", alpha=0.8))
 
-    print('green square:', sq_uv)
-
 
 def vanishing_points_from_R_cw(
     K: np.ndarray, R_cw: np.ndarray
@@ -157,18 +155,18 @@ def draw_vanishing_points(
 def world_origin_image_point(
     P: np.ndarray, affine: bool = False
 ) -> np.ndarray | None:
-    """Image (u, v) of world origin from P: P @ [0,0,0,1] = P[:, 3].
-    Perspective: (u,v) = (p0/p2, p1/p2). Affine: (u,v) = (p0, p1).
-    Returns (2,) uv or None if not finite."""
-    p = P[:, 3]
+    """Image (u, v) of world origin. Perspective: (u,v) = (p0/p2, p1/p2).
+    Affine: use P_affine = K[R_affine|t] (last row of R zeroed), then (u,v) = (p0/p2, p1/p2)."""
     if affine:
-        u, v = float(p[0]), float(p[1])
+        P_affine = pinhole._affine_P(P)
+        p = P_affine[:, 3]
     else:
-        if abs(p[2]) <= 1e-6:
-            return None
-        u, v = p[0] / p[2], p[1] / p[2]
-        if p[2] <= 0:
-            return None
+        p = P[:, 3]
+    if abs(p[2]) <= 1e-6:
+        return None
+    u, v = p[0] / p[2], p[1] / p[2]
+    if not affine and p[2] <= 0:
+        return None
     if not (np.isfinite(u) and np.isfinite(v)):
         return None
     return np.array([u, v])
