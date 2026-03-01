@@ -926,11 +926,11 @@ class CameraState:
         K = self.get_K()
         P = build_projection_matrix(K, R_cam, camera_center_world)
 
-        print(f"P: {P}")
+        # print(f"P: {P}")
         U, S, V = np.linalg.svd(P)
-        print(f"U: {U}")
-        print(f"S: {S}")
-        print(f"V: {V}")
+        # print(f"U: {U}")
+        # print(f"S: {S}")
+        # print(f"V: {V}")
         return P
 
     def get_R_and_t(self) -> tuple[np.ndarray, np.ndarray]:
