@@ -36,6 +36,15 @@ def backproject_image_point_to_ray(
     return C, d_world
 
 
+def angle_between_ray_directions_deg(d1: np.ndarray, d2: np.ndarray) -> float:
+    """
+    Angle in degrees between two unit ray directions (e.g. from backproject).
+    d1, d2: (3,) normalized; returns 0..180.
+    """
+    dot = np.clip(float(np.dot(d1.ravel(), d2.ravel())), -1.0, 1.0)
+    return float(np.rad2deg(np.arccos(dot)))
+
+
 def get_camera_pyramid(
     C: np.ndarray,
     R_cam: np.ndarray,

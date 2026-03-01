@@ -1,17 +1,26 @@
 """
 Feature/plugin registry for camera model app (Open-Closed principle).
 
-New features (binocular, multi-camera, epipolar demo, angle-by-K, etc.) can be
-registered without modifying the core app. Each plugin provides:
-- Optional: checkbox widget and callback when toggled
-- Optional: extra draw logic (3D / image)
-- Optional: mouse/event hooks on the image plot
-
-Usage:
-  from camera_model.plugins import register_feature, get_features
-  register_feature("backproject", BackprojectFeature())
+Demos: exclusive modes (only one active). Register with register_demo(Demo()).
+Features: optional checkboxes (legacy). Register with register_feature(name, Feature()).
 """
 
-from .registry import register_feature, get_features, Feature
+from .registry import (
+    register_feature,
+    get_features,
+    Feature,
+    register_demo,
+    get_demos,
+    get_demo_by_id,
+    Demo,
+)
 
-__all__ = ["register_feature", "get_features", "Feature"]
+__all__ = [
+    "register_feature",
+    "get_features",
+    "Feature",
+    "register_demo",
+    "get_demos",
+    "get_demo_by_id",
+    "Demo",
+]

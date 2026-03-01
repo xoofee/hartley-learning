@@ -46,3 +46,74 @@ def register_feature(name: str, feature: Feature) -> None:
 
 def get_features() -> dict[str, Feature]:
     return dict(_FEATURES)
+
+
+# ---------------------------------------------------------------------------
+# Exclusive demos (only one active at a time; each independent logic)
+# ---------------------------------------------------------------------------
+
+_DEMOS: list["Demo"] = []
+_DEMOS_BY_ID: dict[str, "Demo"] = {}
+
+
+class Demo:
+    """
+    One demo/mode in the Demos area. Buttons are exclusive: only one demo active.
+    When demo is off, on_deactivated() is called so the demo can release all related state.
+    """
+
+    def id(self) -> str:
+        """Unique id (e.g. 'none', 'p_planes', 'backproject', 'angulometer')."""
+        raise NotImplementedError
+
+    def label(self) -> str:
+        """Short label for the demo button."""
+        raise NotImplementedError
+
+    def on_activated(self, context: dict) -> None:
+        """Called when this demo becomes the active demo."""
+        pass
+
+    def on_deactivated(self) -> None:
+        """Called when this demo is turned off; release all related objects/state."""
+        pass
+
+    def needs_image_events(self) -> bool:
+        """If True, app will connect image-plot mouse events and dispatch to this demo."""
+        return False
+
+    def on_draw_3d(self, ax3d, context: dict) -> None:
+        """Draw on 3D axes (only called when this demo is active)."""
+        pass
+
+    def on_draw_image(self, ax_img, context: dict) -> None:
+        """Draw on image axes (only called when this demo is active)."""
+        pass
+
+    def on_image_button_press(self, event, context: dict) -> None:
+        """Mouse press on image plot (only when needs_image_events and this demo is active)."""
+        pass
+
+    def on_image_motion(self, event, context: dict) -> None:
+        """Mouse motion (only when needs_image_events and this demo is active). context has state, etc."""
+        pass
+
+    def on_image_button_release(self, event, context: dict) -> None:
+        """Mouse release on image plot."""
+        pass
+
+
+def register_demo(demo: Demo) -> None:
+    """Register a demo; order of registration is button order. Idempotent per id."""
+    if demo.id() in _DEMOS_BY_ID:
+        return
+    _DEMOS.append(demo)
+    _DEMOS_BY_ID[demo.id()] = demo
+
+
+def get_demos() -> list[Demo]:
+    return list(_DEMOS)
+
+
+def get_demo_by_id(demo_id: str) -> Demo | None:
+    return _DEMOS_BY_ID.get(demo_id)

@@ -21,7 +21,6 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QScrollArea,
-    QCheckBox,
 )
 from PyQt5.QtCore import Qt
 
@@ -38,11 +37,11 @@ from .widgets import (
     RotationParamsWidget,
     CameraCenterWidget,
 )
-from .plugins import get_features
-from .plugins.builtin import register_builtin_features
+from .plugins.registry import get_demo_by_id
+from .plugins.demos import register_builtin_demos, build_demos_button_group
 
-# Register built-in features (P row planes, backproject) so they appear as checkboxes.
-register_builtin_features()
+# Register built-in demos (exclusive: None, P row planes, Backproject, Angulometer).
+register_builtin_demos()
 
 
 class MainWindow(QMainWindow):
@@ -52,7 +51,8 @@ class MainWindow(QMainWindow):
         self.triangle_pts = scene.get_scene_triangle(0.8, 1.0, 1.5)
         self.rectangle_pts = scene.get_scene_rectangle(0.4, 0.4, 1.5, y_center=0.8, z_center=0.4)
         self.state = state_module.CameraState()
-        self._backproject_cids: list[int] = []
+        self._current_demo_id: str = "none"
+        self._demo_cids: list[int] = []
         self.init_ui()
 
     def init_ui(self) -> None:
@@ -131,17 +131,11 @@ class MainWindow(QMainWindow):
         pose_row.setLayout(pose_row_layout)
         right_layout.addWidget(pose_row)
 
-        # Plugin checkboxes (built-in: show P planes, backproject)
-        self._feature_instances = {}
-        for name, feat in get_features().items():
-            w = feat.checkbox_widget(self)
-            if w is not None:
-                right_layout.addWidget(w)
-                self._feature_instances[name] = feat
-                if name == "show_P_planes":
-                    w.stateChanged.connect(self._draw_all)
-                elif name == "backproject":
-                    w.stateChanged.connect(self._on_backproject_toggled)
+        # Demos area: exclusive buttons (only one demo active at a time)
+        demos_group, self._demos_button_group, self._demos_buttons = build_demos_button_group(self)
+        right_layout.addWidget(demos_group)
+        for demo_id, btn in self._demos_buttons.items():
+            btn.clicked.connect(lambda checked, did=demo_id: self._on_demo_clicked(did))
 
         right_layout.addStretch()
         scroll_widget.setLayout(right_layout)
@@ -167,62 +161,73 @@ class MainWindow(QMainWindow):
             "rectangle_pts": self.rectangle_pts,
         }
 
-    def _on_backproject_toggled(self) -> None:
-        backproject = self._feature_instances.get("backproject")
-        if backproject is None:
+    def _on_demo_clicked(self, demo_id: str) -> None:
+        prev_id = self._current_demo_id
+        if prev_id == demo_id:
             return
-        if backproject.is_checked():
-            backproject.set_point_from_context(self._get_context())
-            self._connect_image_plot_events()
-        else:
-            self._disconnect_image_plot_events()
+        prev = get_demo_by_id(prev_id)
+        if prev is not None:
+            prev.on_deactivated()
+        self._current_demo_id = demo_id
+        current = get_demo_by_id(demo_id)
+        if current is not None:
+            current.on_activated(self._get_context())
+        self._update_demo_events()
         self._draw_all()
 
-    def _connect_image_plot_events(self) -> None:
-        self._disconnect_image_plot_events()
-        cid1 = self.canvas.mpl_connect("button_press_event", self._on_image_plot_button_press)
-        cid2 = self.canvas.mpl_connect("motion_notify_event", self._on_image_plot_motion)
-        cid3 = self.canvas.mpl_connect("button_release_event", self._on_image_plot_button_release)
-        self._backproject_cids = [cid1, cid2, cid3]
-
-    def _disconnect_image_plot_events(self) -> None:
-        for cid in self._backproject_cids:
+    def _update_demo_events(self) -> None:
+        """Connect or disconnect image-plot events depending on current demo."""
+        for cid in self._demo_cids:
             try:
                 self.canvas.mpl_disconnect(cid)
             except Exception:
                 pass
-        self._backproject_cids = []
+        self._demo_cids = []
+        current = get_demo_by_id(self._current_demo_id)
+        if current is not None and current.needs_image_events():
+            cid1 = self.canvas.mpl_connect("button_press_event", self._on_image_plot_button_press)
+            cid2 = self.canvas.mpl_connect("motion_notify_event", self._on_image_plot_motion)
+            cid3 = self.canvas.mpl_connect("button_release_event", self._on_image_plot_button_release)
+            self._demo_cids = [cid1, cid2, cid3]
 
     def _on_image_plot_button_press(self, event) -> None:
-        backproject = self._feature_instances.get("backproject")
-        if backproject is None or not backproject.is_checked() or event.inaxes != self.ax_img:
+        if event.inaxes != self.ax_img:
             return
-        backproject.set_dragging(True)
+        current = get_demo_by_id(self._current_demo_id)
+        if current is None or not current.needs_image_events():
+            return
+        ctx = self._get_context()
+        current.on_image_button_press(event, ctx)
+        self._draw_all()
 
     def _on_image_plot_motion(self, event) -> None:
-        backproject = self._feature_instances.get("backproject")
-        if (
-            backproject is None
-            or not backproject.is_checked()
-            or not backproject.is_dragging()
-            or event.inaxes != self.ax_img
-        ):
+        if event.inaxes != self.ax_img or event.xdata is None or event.ydata is None:
             return
-        if event.xdata is not None and event.ydata is not None:
-            u_d, v_d = float(event.xdata), float(event.ydata)
-            dist = self.state.get_distortion()
-            if distortion.distortion_params_nonzero(*dist):
-                K = self.state.get_K()
-                u, v = distortion.undistort_point(u_d, v_d, K, *dist)
-            else:
-                u, v = u_d, v_d
-            backproject.set_point_uv(u, v)
-            self._draw_all()
+        current = get_demo_by_id(self._current_demo_id)
+        if current is None or not current.needs_image_events():
+            return
+        u_d, v_d = float(event.xdata), float(event.ydata)
+        dist = self.state.get_distortion()
+        K = self.state.get_K()
+        if distortion.distortion_params_nonzero(*dist):
+            u, v = distortion.undistort_point(u_d, v_d, K, *dist)
+        else:
+            u, v = u_d, v_d
+        # Update point(s) for demos that support dragging
+        if self._current_demo_id == "backproject" and getattr(current, "is_dragging", lambda: False)():
+            current.set_point_uv(u, v)
+        elif self._current_demo_id == "angulometer":
+            idx = getattr(current, "get_dragging_index", lambda: None)()
+            if idx is not None:
+                current.set_point_uv(idx, u, v)
+        current.on_image_motion(event, self._get_context())
+        self._draw_all()
 
     def _on_image_plot_button_release(self, event) -> None:
-        backproject = self._feature_instances.get("backproject")
-        if backproject is not None and backproject.is_checked():
-            backproject.set_dragging(False)
+        current = get_demo_by_id(self._current_demo_id)
+        if current is not None and current.needs_image_events():
+            current.on_image_button_release(event, self._get_context())
+        self._draw_all()
 
     def _set_3d_axes_limits_once(self) -> None:
         margin = 6.0
@@ -338,8 +343,9 @@ class MainWindow(QMainWindow):
         self.ax3d.set_box_aspect((rx, ry, rz))
 
         context = self._get_context()
-        for feat in self._feature_instances.values():
-            feat.on_draw_3d(self.ax3d, context)
+        current_demo = get_demo_by_id(self._current_demo_id)
+        if current_demo is not None:
+            current_demo.on_draw_3d(self.ax3d, context)
 
         K = self.state.get_K()
         dist = self.state.get_distortion()
@@ -360,8 +366,8 @@ class MainWindow(QMainWindow):
         rendering.draw_world_origin_on_image(
             self.ax_img, P, self.image_width_px, self.image_height_px, K=K, dist=dist
         )
-        for feat in self._feature_instances.values():
-            feat.on_draw_image(self.ax_img, context)
+        if current_demo is not None:
+            current_demo.on_draw_image(self.ax_img, context)
 
         self.ax_img.set_title("Image")
         self.ax_img.set_xlabel("u (pixels)")
