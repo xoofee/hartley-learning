@@ -41,7 +41,7 @@ Run (from `ch6_camera_model`): `python run_imaging_app.py` or `python -m camera_
 Demos area: **exclusive** buttons (only one demo active at a time). Each demo’s logic is independent; when a demo is turned off, `on_deactivated()` is called so it can release all related state.
 
 - **plugins/registry.py** — `Demo` base class and `register_demo` / `get_demos` / `get_demo_by_id`.
-- **plugins/demos.py** — Built-in demos: **None**, **P row planes**, **Backproject (1 pt)**, **Angulometer (2 pts)**. `build_demos_button_group()` builds the exclusive button group for the right pane.
+- **plugins/demos/** — Built-in demos (one file per demo): `none_demo.py`, `p_row_planes.py`, `backproject.py`, `angulometer.py`; `__init__.py` exports `register_builtin_demos()` and `build_demos_button_group()`.
 
 ## 1 Angulometer
 

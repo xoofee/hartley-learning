@@ -300,7 +300,11 @@ class MainWindow(QMainWindow):
         R_cam = self.state.get_R_cw()
         P = self.state.get_P()
         base_world, apex = geometry.get_camera_pyramid(
-            camera_center_world, R_cam, scale=0.5, depth=0.3
+            camera_center_world,
+            R_cam,
+            sensor_width_mm=self.state.sensor_width_mm,
+            sensor_height_mm=self.state.sensor_height_mm,
+            focal_length_mm=self.state.focal_length_mm,
         )
         verts_pyramid = [
             [apex, base_world[0], base_world[1]],

@@ -48,14 +48,29 @@ def angle_between_ray_directions_deg(d1: np.ndarray, d2: np.ndarray) -> float:
 def get_camera_pyramid(
     C: np.ndarray,
     R_cam: np.ndarray,
-    scale: float = 0.5,
-    depth: float = 0.3,
+    *,
+    sensor_width_mm: float,
+    sensor_height_mm: float,
+    focal_length_mm: float,
+    size_factor: float = 20.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (base_corners (4,3), apex C). Base is in front of camera at depth."""
-    b1 = np.array([-scale, -scale, depth])
-    b2 = np.array([scale, -scale, depth])
-    b3 = np.array([scale, scale, depth])
-    b4 = np.array([-scale, scale, depth])
+    """
+    Return (base_corners (4,3), apex C). Base is in front of camera at depth.
+
+    Pyramid mimics the real camera: base aspect ratio = sensor aspect, and
+    base_edge / height = sensor_size / focal_length (so the frustum matches
+    the camera field of view). In camera frame, at z = depth the base
+    half-extents are (sensor/2) * depth / focal_length.
+    """
+    if focal_length_mm <= 0:
+        focal_length_mm = 1e-6
+    height = focal_length_mm * 0.001 * size_factor;
+    scale_x = size_factor * (sensor_width_mm * 0.001 / 2.0)
+    scale_y = size_factor * (sensor_height_mm * 0.001 / 2.0)
+    b1 = np.array([-scale_x, -scale_y, height])
+    b2 = np.array([scale_x, -scale_y, height])
+    b3 = np.array([scale_x, scale_y, height])
+    b4 = np.array([-scale_x, scale_y, height])
     pyramid_points_cam = np.array([b1, b2, b3, b4])
     R_wc = R_cam.T
     pyramid_points_cam_world = (R_wc @ pyramid_points_cam.T).T + C
