@@ -1,6 +1,11 @@
 """
 A gui application to simulate a camera.
 
+Bug:
+the front/back detection is not fully correct. so there are weird shapes in the image plot when the shape is near the principal plane
+say: some vertices are before the principal plane and some vertices are behind the plane/camera
+
+Initial requirements:
 1 a scene with a horizontal square and a vertical triangle in the world coordinate system
 2 a camera with a pinhole model
 it have focal_length_mm, sensor (sensor_width_mm, sensor_height_mm), pixel pitch (pixel_size_x_mm, pixel_size_y_mm)
@@ -383,6 +388,17 @@ def project_points(P: np.ndarray, points_world: np.ndarray) -> np.ndarray:
     return np.column_stack([u, v])
 
 
+def _project_one(P: np.ndarray, point_world: np.ndarray) -> tuple[float, float, float]:
+    """Project one 3D point; returns (u, v, w). w is depth (camera z); w <= 0 means behind camera."""
+    x = P @ np.append(point_world, 1.0)
+    w = float(x[2])
+    if abs(w) < 1e-12:
+        w = 1e-12
+    u = x[0] / w
+    v = x[1] / w
+    return u, v, w
+
+
 # ---------------------------------------------------------------------------
 # Lens distortion (OpenCV-style: radial k1,k2,k3 + tangential p1,p2)
 # ---------------------------------------------------------------------------
@@ -488,6 +504,86 @@ def distort_uv_if_needed(
     u, v = uv[:, 0], uv[:, 1]
     u_d, v_d = apply_distortion(u, v, K, k1, k2, k3, p1, p2)
     return np.column_stack([u_d, v_d])
+
+
+def _polygon_ideal_edges_to_distorted(
+    uv: np.ndarray,
+    K: np.ndarray,
+    k1: float,
+    k2: float,
+    k3: float,
+    p1: float,
+    p2: float,
+    n_samples_per_edge: int = 32,
+) -> np.ndarray:
+    """
+    Closed polygon in ideal uv (N,2) -> distorted polygon (M,2) with curved edges.
+    Use only when all vertices are in front of the camera (no clipping).
+    """
+    n = len(uv)
+    out = []
+    for i in range(n):
+        j = (i + 1) % n
+        for k in range(n_samples_per_edge):
+            t = k / n_samples_per_edge
+            p = (1.0 - t) * uv[i] + t * uv[j]
+            u_d, v_d = apply_distortion(p[0], p[1], K, k1, k2, k3, p1, p2)
+            out.append([u_d, v_d])
+    return np.array(out)
+
+
+def _polygon_3d_edges_to_distorted(
+    points_world: np.ndarray,
+    P: np.ndarray,
+    K: np.ndarray,
+    k1: float,
+    k2: float,
+    k3: float,
+    p1: float,
+    p2: float,
+    n_samples_per_edge: int = 32,
+) -> np.ndarray:
+    """
+    Closed 3D polygon -> distorted polygon with curved edges and correct visibility.
+    Samples each edge in 3D, clips to half-space in front of camera (w > 0), then projects
+    and distorts. Avoids spurious lines when an edge or vertex is behind the camera.
+    """
+    n = len(points_world)
+    out = []
+    for i in range(n):
+        j = (i + 1) % n
+        A = points_world[i]
+        B = points_world[j]
+        u_a, v_a, w_a = _project_one(P, A)
+        u_b, v_b, w_b = _project_one(P, B)
+        # Clip edge to visible (w > 0)
+        if w_a <= 0 and w_b <= 0:
+            continue
+        if w_a > 0 and w_b > 0:
+            t_lo, t_hi = 0.0, 1.0
+        else:
+            # One in front, one behind: intersect with w = 0
+            # w(t) = (1-t)*w_a + t*w_b = 0  =>  t = w_a / (w_a - w_b)
+            t_cross = w_a / (w_a - w_b) if (w_a - w_b) != 0 else 0.0
+            t_cross = max(0.0, min(1.0, t_cross))
+            if w_a > 0:
+                t_lo, t_hi = 0.0, t_cross
+            else:
+                t_lo, t_hi = t_cross, 1.0
+        # Sample t in [t_lo, t_hi]
+        n_pts = max(2, int(n_samples_per_edge * (t_hi - t_lo) + 0.5))
+        for ki in range(n_pts):
+            t = t_lo + (t_hi - t_lo) * (ki / (n_pts - 1)) if n_pts > 1 else t_lo
+            Q = (1.0 - t) * A + t * B
+            u_ideal, v_ideal, w = _project_one(P, Q)
+            if w <= 0:
+                continue
+            u_d, v_d = apply_distortion(u_ideal, v_ideal, K, k1, k2, k3, p1, p2)
+            out.append([u_d, v_d])
+    if len(out) < 3:
+        return np.zeros((0, 2))
+    return np.array(out)
+
 
 def backproject_image_point_to_ray(
     u: float,
@@ -659,26 +755,28 @@ def draw_projected_scene(
     K: np.ndarray | None = None,
     dist: tuple[float, float, float, float, float] | None = None,
 ) -> None:
-    """Draw projected square, triangle, and rectangle on axes (for display). Uses projected vertices and fill.
-    If K and dist (k1,k2,k3,p1,p2) are provided and dist is non-zero, applies lens distortion to uv."""
+    """Draw projected square, triangle, and rectangle on axes (for display).
+    If K and dist are provided and non-zero, edges are sampled in ideal space and distorted
+    so that straight 3D edges appear as correct curves in the distorted image."""
     sq_uv = project_points(P, square_pts)
     tri_uv = project_points(P, triangle_pts)
     rect_uv = project_points(P, rectangle_pts)
     if K is not None and dist is not None and _distortion_params_nonzero(*dist):
         k1, k2, k3, p1, p2 = dist
-        sq_uv = distort_uv_if_needed(sq_uv, K, k1, k2, k3, p1, p2)
-        tri_uv = distort_uv_if_needed(tri_uv, K, k1, k2, k3, p1, p2)
-        rect_uv = distort_uv_if_needed(rect_uv, K, k1, k2, k3, p1, p2)
+        # Sample edges in 3D and clip to visible (w > 0) so edges behind camera don't draw spurious lines
+        sq_uv = _polygon_3d_edges_to_distorted(square_pts, P, K, k1, k2, k3, p1, p2)
+        tri_uv = _polygon_3d_edges_to_distorted(triangle_pts, P, K, k1, k2, k3, p1, p2)
+        rect_uv = _polygon_3d_edges_to_distorted(rectangle_pts, P, K, k1, k2, k3, p1, p2)
     ax.set_xlim(0, img_width)
     ax.set_ylim(img_height, 0)
     ax.set_aspect("equal")
     from matplotlib.patches import Polygon
-    poly_sq = Polygon(sq_uv, facecolor="green", edgecolor="darkgreen", alpha=0.8)
-    poly_tri = Polygon(tri_uv, facecolor="red", edgecolor="darkred", alpha=0.8)
-    poly_rect = Polygon(rect_uv, facecolor="blue", edgecolor="darkblue", alpha=0.8)
-    ax.add_patch(poly_sq)
-    ax.add_patch(poly_tri)
-    ax.add_patch(poly_rect)
+    if len(sq_uv) >= 3:
+        ax.add_patch(Polygon(sq_uv, facecolor="green", edgecolor="darkgreen", alpha=0.8))
+    if len(tri_uv) >= 3:
+        ax.add_patch(Polygon(tri_uv, facecolor="red", edgecolor="darkred", alpha=0.8))
+    if len(rect_uv) >= 3:
+        ax.add_patch(Polygon(rect_uv, facecolor="blue", edgecolor="darkblue", alpha=0.8))
 
 
 def vanishing_points_from_R_cw(K: np.ndarray, R_cw: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
