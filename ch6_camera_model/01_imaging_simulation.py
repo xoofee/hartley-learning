@@ -371,7 +371,7 @@ def decompose_P(P: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def project_points(P: np.ndarray, points_world: np.ndarray) -> np.ndarray:
-    """points_world (N, 3) -> (N, 2) image coords (u, v)."""
+    """points_world (N, 3) -> (N, 2) image coords (u, v) ideal (no distortion)."""
     n = points_world.shape[0]
     ones = np.ones((n, 1))
     hom = np.hstack([points_world, ones])
@@ -382,6 +382,112 @@ def project_points(P: np.ndarray, points_world: np.ndarray) -> np.ndarray:
     v = x[:, 1] / w
     return np.column_stack([u, v])
 
+
+# ---------------------------------------------------------------------------
+# Lens distortion (OpenCV-style: radial k1,k2,k3 + tangential p1,p2)
+# ---------------------------------------------------------------------------
+
+def _distortion_params_nonzero(k1: float, k2: float, k3: float, p1: float, p2: float) -> bool:
+    """True if any distortion parameter is non-zero."""
+    return abs(k1) > 1e-12 or abs(k2) > 1e-12 or abs(k3) > 1e-12 or abs(p1) > 1e-12 or abs(p2) > 1e-12
+
+
+def apply_distortion(
+    u: float | np.ndarray,
+    v: float | np.ndarray,
+    K: np.ndarray,
+    k1: float,
+    k2: float,
+    k3: float,
+    p1: float,
+    p2: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Apply lens distortion to ideal pixel coords (u, v).
+    OpenCV model: radial (k1,k2,k3) + tangential (p1,p2).
+    (u, v) can be scalars or arrays; returns (u_dist, v_dist) same shape.
+    """
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+    x = (np.asarray(u, dtype=np.float64) - cx) / fx
+    y = (np.asarray(v, dtype=np.float64) - cy) / fy
+    r2 = x * x + y * y
+    r4 = r2 * r2
+    r6 = r2 * r4
+    radial = 1.0 + k1 * r2 + k2 * r4 + k3 * r6
+    x1 = x * radial
+    y1 = y * radial
+    x2 = x1 + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)
+    y2 = y1 + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y
+    u_dist = x2 * fx + cx
+    v_dist = y2 * fy + cy
+    return u_dist, v_dist
+
+
+def undistort_point(
+    u_dist: float,
+    v_dist: float,
+    K: np.ndarray,
+    k1: float,
+    k2: float,
+    k3: float,
+    p1: float,
+    p2: float,
+    max_iter: int = 20,
+) -> tuple[float, float]:
+    """
+    Undistort distorted pixel (u_dist, v_dist) to ideal (u, v).
+    Iterative: start from (u_dist, v_dist), then correct so that apply_distortion(u,v) ≈ (u_dist, v_dist).
+    """
+    u, v = float(u_dist), float(v_dist)
+    for _ in range(max_iter):
+        u_d, v_d = apply_distortion(u, v, K, k1, k2, k3, p1, p2)
+        du = u_dist - u_d
+        dv = v_dist - v_d
+        u += du
+        v += dv
+        if abs(du) < 1e-6 and abs(dv) < 1e-6:
+            break
+    return u, v
+
+
+def distort_uv_if_needed(
+    uv: np.ndarray,
+    K: np.ndarray,
+    k1: float,
+    k2: float,
+    k3: float,
+    p1: float,
+    p2: float,
+) -> np.ndarray:
+    """
+    uv (N, 2) ideal pixel coords. If any of (k1,k2,k3,p1,p2) non-zero, apply distortion; else return uv.
+
+    // 1) project to normalized plane
+    x = X / Z;
+    y = Y / Z;
+
+    // 2) apply distortion (your formula)
+    r2 = x*x + y*y;
+    radial = 1 + k1*r2 + k2*r2*r2 + k3*r2*r2*r2;
+
+    x' = x*radial + 2*p1*x*y + p2*(r2 + 2*x*x);
+    y' = y*radial + p1*(r2 + 2*y*y) + 2*p2*x*y;
+
+    // 3) convert to pixels
+    u = fx*x' + cx;
+    v = fy*y' + cy;
+
+    p = K*D*[R t]*Xw
+
+    where D is a nonlinear distortion function
+
+    """
+    if not _distortion_params_nonzero(k1, k2, k3, p1, p2):
+        return uv
+    u, v = uv[:, 0], uv[:, 1]
+    u_d, v_d = apply_distortion(u, v, K, k1, k2, k3, p1, p2)
+    return np.column_stack([u_d, v_d])
 
 def backproject_image_point_to_ray(
     u: float,
@@ -406,7 +512,6 @@ def backproject_image_point_to_ray(
         d_world = d_world / d_norm
     C = (-R_cw.T @ t_world_to_cam).ravel()[:3]
     return C, d_world
-
 
 def get_camera_pyramid(
     C: np.ndarray,
@@ -551,16 +656,22 @@ def draw_projected_scene(
     rectangle_pts: np.ndarray,
     img_width: float,
     img_height: float,
+    K: np.ndarray | None = None,
+    dist: tuple[float, float, float, float, float] | None = None,
 ) -> None:
-    """Draw projected square, triangle, and rectangle on axes (for display). Uses projected vertices and fill."""
+    """Draw projected square, triangle, and rectangle on axes (for display). Uses projected vertices and fill.
+    If K and dist (k1,k2,k3,p1,p2) are provided and dist is non-zero, applies lens distortion to uv."""
     sq_uv = project_points(P, square_pts)
     tri_uv = project_points(P, triangle_pts)
     rect_uv = project_points(P, rectangle_pts)
+    if K is not None and dist is not None and _distortion_params_nonzero(*dist):
+        k1, k2, k3, p1, p2 = dist
+        sq_uv = distort_uv_if_needed(sq_uv, K, k1, k2, k3, p1, p2)
+        tri_uv = distort_uv_if_needed(tri_uv, K, k1, k2, k3, p1, p2)
+        rect_uv = distort_uv_if_needed(rect_uv, K, k1, k2, k3, p1, p2)
     ax.set_xlim(0, img_width)
     ax.set_ylim(img_height, 0)
     ax.set_aspect("equal")
-    
-    # Draw filled polygons
     from matplotlib.patches import Polygon
     poly_sq = Polygon(sq_uv, facecolor="green", edgecolor="darkgreen", alpha=0.8)
     poly_tri = Polygon(tri_uv, facecolor="red", edgecolor="darkred", alpha=0.8)
@@ -593,17 +704,23 @@ def draw_vanishing_points(
     img_width: float,
     img_height: float,
     margin: float = 50.0,
+    dist: tuple[float, float, float, float, float] | None = None,
 ) -> None:
     """
     Draw vanishing points for world X (R), Y (G), Z (B) on the image axes if finite and visible.
+    If dist (k1,k2,k3,p1,p2) is provided and non-zero, applies lens distortion to vp coords.
     """
     vp_x, vp_y, vp_z = vanishing_points_from_R_cw(K, R_cw)
     def in_bounds(u: float, v: float) -> bool:
         return (-margin <= u <= img_width + margin) and (-margin <= v <= img_height + margin)
+    def maybe_distort(u: float, v: float):
+        if dist is not None and _distortion_params_nonzero(*dist):
+            u, v = apply_distortion(u, v, K, *dist)
+        return u, v
     for uv, color, label in [(vp_x, "red", "X"), (vp_y, "green", "Y"), (vp_z, "blue", "Z")]:
         if uv is None:
             continue
-        u, v = uv[0], uv[1]
+        u, v = maybe_distort(uv[0], uv[1])
         if not in_bounds(u, v):
             continue
         ax.scatter(u, v, c=color, s=80, zorder=5, edgecolors="white", linewidths=1.5)
@@ -633,12 +750,17 @@ def draw_world_origin_on_image(
     img_width: float,
     img_height: float,
     margin: float = 50.0,
+    K: np.ndarray | None = None,
+    dist: tuple[float, float, float, float, float] | None = None,
 ) -> None:
-    """Draw world origin image point in purple if finite and visible."""
+    """Draw world origin image point in purple if finite and visible.
+    If K and dist are provided and non-zero, applies lens distortion to the point."""
     uv = world_origin_image_point(P)
     if uv is None:
         return
     u, v = uv[0], uv[1]
+    if K is not None and dist is not None and _distortion_params_nonzero(*dist):
+        u, v = apply_distortion(u, v, K, *dist)
     if not ((-margin <= u <= img_width + margin) and (-margin <= v <= img_height + margin)):
         return
     ax.scatter(u, v, c="purple", s=80, zorder=5, edgecolors="white", linewidths=1.5)
@@ -672,6 +794,16 @@ class CameraState:
         self.C_x = 4.0
         self.C_y = 0.0
         self.C_z = 2.0
+        # Lens distortion (OpenCV-style). Default: no distortion.
+        self.dist_k1 = 0.0
+        self.dist_k2 = 0.0
+        self.dist_k3 = 0.0
+        self.dist_p1 = 0.0
+        self.dist_p2 = 0.0
+
+    def get_distortion(self) -> tuple[float, float, float, float, float]:
+        """Return (k1, k2, k3, p1, p2) for lens distortion."""
+        return (self.dist_k1, self.dist_k2, self.dist_k3, self.dist_p1, self.dist_p2)
 
     def get_R_cw(self) -> np.ndarray:
         return R_wc_from_yaw_pitch_roll_camera(self.yaw_deg, self.pitch_deg, self.roll_deg).T @ R_CW_BASE_CAM
@@ -848,7 +980,7 @@ class CameraParamsWidget(QWidget):
         layout = QVBoxLayout()
         grid = QGridLayout()
         row = 0
-        grid.addWidget(QLabel("focal_length_mm:"), row, 0)
+        grid.addWidget(QLabel("focal_length"), row, 0)
         self.spin_f = QDoubleSpinBox()
         self.spin_f.setRange(1.0, 5000.0)
         self.spin_f.setSuffix(" mm")
@@ -856,7 +988,7 @@ class CameraParamsWidget(QWidget):
         self.spin_f.setMaximumWidth(90)
         grid.addWidget(self.spin_f, row, 1)
         row += 1
-        grid.addWidget(QLabel("sensor_width_mm:"), row, 0)
+        grid.addWidget(QLabel("sensor_width"), row, 0)
         self.spin_wphys = QDoubleSpinBox()
         self.spin_wphys.setRange(0.1, 200.0)
         self.spin_wphys.setDecimals(2)
@@ -865,7 +997,7 @@ class CameraParamsWidget(QWidget):
         self.spin_wphys.setMaximumWidth(90)
         grid.addWidget(self.spin_wphys, row, 1)
         row += 1
-        grid.addWidget(QLabel("sensor_height_mm:"), row, 0)
+        grid.addWidget(QLabel("sensor_height"), row, 0)
         self.spin_hphys = QDoubleSpinBox()
         self.spin_hphys.setRange(0.1, 200.0)
         self.spin_hphys.setDecimals(2)
@@ -874,7 +1006,7 @@ class CameraParamsWidget(QWidget):
         self.spin_hphys.setMaximumWidth(90)
         grid.addWidget(self.spin_hphys, row, 1)
         row += 1
-        grid.addWidget(QLabel("pixel_size_x_mm:"), row, 0)
+        grid.addWidget(QLabel("pixel_size_x"), row, 0)
         self.spin_wpix = QDoubleSpinBox()
         self.spin_wpix.setRange(0.0001, 1.0)
         self.spin_wpix.setDecimals(4)
@@ -883,7 +1015,7 @@ class CameraParamsWidget(QWidget):
         self.spin_wpix.setMaximumWidth(90)
         grid.addWidget(self.spin_wpix, row, 1)
         row += 1
-        grid.addWidget(QLabel("pixel_size_y_mm:"), row, 0)
+        grid.addWidget(QLabel("pixel_size_y"), row, 0)
         self.spin_hpix = QDoubleSpinBox()
         self.spin_hpix.setRange(0.0001, 1.0)
         self.spin_hpix.setDecimals(4)
@@ -913,6 +1045,71 @@ class CameraParamsWidget(QWidget):
         self.spin_wpix.setValue(self.state.pixel_size_x_mm)
         self.spin_hpix.setValue(self.state.pixel_size_y_mm)
         for spin in (self.spin_f, self.spin_wphys, self.spin_hphys, self.spin_wpix, self.spin_hpix):
+            spin.blockSignals(False)
+
+
+class DistortionParamsWidget(QWidget):
+    """Lens distortion (OpenCV-style): k1, k2, k3 radial; p1, p2 tangential. Default: all zero."""
+
+    def __init__(self, state: CameraState):
+        super().__init__()
+        self.state = state
+        group = QGroupBox("Lens distortion")
+        group.setFont(QFont("Arial", 10, QFont.Bold))
+        grid = QGridLayout()
+        row = 0
+        for label, attr, decimals in [
+            ("k1:", "dist_k1", 4),
+            ("k2:", "dist_k2", 6),
+            ("k3:", "dist_k3", 6),
+            ("p1:", "dist_p1", 6),
+            ("p2:", "dist_p2", 6),
+        ]:
+            grid.addWidget(QLabel(label), row, 0)
+            spin = QDoubleSpinBox()
+            spin.setRange(-1.0, 1.0)
+            spin.setDecimals(decimals)
+            spin.setSingleStep(0.01 if "k" in label else 0.001)
+            spin.setValue(getattr(state, attr))
+            spin.setMaximumWidth(90)
+            grid.addWidget(spin, row, 1)
+            setattr(self, "spin_" + attr, spin)
+            row += 1
+        layout = QVBoxLayout()
+        layout.addLayout(grid)
+        group.setLayout(layout)
+        main = QVBoxLayout()
+        main.addWidget(group)
+        self.setLayout(main)
+
+    def apply_to_state(self) -> None:
+        self.state.dist_k1 = self.spin_dist_k1.value()
+        self.state.dist_k2 = self.spin_dist_k2.value()
+        self.state.dist_k3 = self.spin_dist_k3.value()
+        self.state.dist_p1 = self.spin_dist_p1.value()
+        self.state.dist_p2 = self.spin_dist_p2.value()
+
+    def sync_from_state(self) -> None:
+        for spin in (
+            self.spin_dist_k1,
+            self.spin_dist_k2,
+            self.spin_dist_k3,
+            self.spin_dist_p1,
+            self.spin_dist_p2,
+        ):
+            spin.blockSignals(True)
+        self.spin_dist_k1.setValue(self.state.dist_k1)
+        self.spin_dist_k2.setValue(self.state.dist_k2)
+        self.spin_dist_k3.setValue(self.state.dist_k3)
+        self.spin_dist_p1.setValue(self.state.dist_p1)
+        self.spin_dist_p2.setValue(self.state.dist_p2)
+        for spin in (
+            self.spin_dist_k1,
+            self.spin_dist_k2,
+            self.spin_dist_k3,
+            self.spin_dist_p1,
+            self.spin_dist_p2,
+        ):
             spin.blockSignals(False)
 
 
@@ -1061,7 +1258,22 @@ class MainWindow(QMainWindow):
             self.params_widget.spin_hpix,
         ):
             spin.valueChanged.connect(self._on_params_changed)
-        right_layout.addWidget(self.params_widget)
+        self.distortion_widget = DistortionParamsWidget(self.state)
+        for spin in (
+            self.distortion_widget.spin_dist_k1,
+            self.distortion_widget.spin_dist_k2,
+            self.distortion_widget.spin_dist_k3,
+            self.distortion_widget.spin_dist_p1,
+            self.distortion_widget.spin_dist_p2,
+        ):
+            spin.valueChanged.connect(self._on_distortion_changed)
+        camera_and_lens_row = QWidget()
+        camera_and_lens_layout = QHBoxLayout()
+        camera_and_lens_layout.setContentsMargins(0, 0, 0, 0)
+        camera_and_lens_layout.addWidget(self.params_widget)
+        camera_and_lens_layout.addWidget(self.distortion_widget)
+        camera_and_lens_row.setLayout(camera_and_lens_layout)
+        right_layout.addWidget(camera_and_lens_row)
         self.edit_P = MatrixEditWidget("P (3×4) editable", 3, 4)
         self.edit_P.matrix_changed.connect(self._on_P_changed)
         right_layout.addWidget(self.edit_P)
@@ -1148,7 +1360,14 @@ class MainWindow(QMainWindow):
         if not self.check_backproject.isChecked() or not self._backproject_dragging or event.inaxes != self.ax_img:
             return
         if event.xdata is not None and event.ydata is not None:
-            self._backproject_point_uv = (float(event.xdata), float(event.ydata))
+            u_d, v_d = float(event.xdata), float(event.ydata)  # display (distorted) coords
+            dist = self.state.get_distortion()
+            if _distortion_params_nonzero(*dist):
+                K = self.state.get_K()
+                u, v = undistort_point(u_d, v_d, K, *dist)
+            else:
+                u, v = u_d, v_d
+            self._backproject_point_uv = (u, v)  # store ideal for ray
             self._draw_all()
 
     def _on_image_plot_button_release(self, event) -> None:
@@ -1173,6 +1392,10 @@ class MainWindow(QMainWindow):
     def _on_params_changed(self) -> None:
         self.params_widget.apply_to_state()
         self._update_matrix_displays()
+        self._draw_all()
+
+    def _on_distortion_changed(self) -> None:
+        self.distortion_widget.apply_to_state()
         self._draw_all()
 
     def _on_pose_changed(self) -> None:
@@ -1269,22 +1492,26 @@ class MainWindow(QMainWindow):
         self.ax3d.set_box_aspect((rx, ry, rz))
         if self.check_show_P_planes.isChecked():
             draw_P_row_planes(self.ax3d, P, xlim, ylim, zlim)
+        K = self.state.get_K()
+        dist = self.state.get_distortion()
         draw_projected_scene(
             self.ax_img, P, self.square_pts, self.triangle_pts, self.rectangle_pts,
-            self.image_width_px, self.image_height_px
+            self.image_width_px, self.image_height_px, K=K, dist=dist
         )
-        K = self.state.get_K()
         draw_vanishing_points(
-            self.ax_img, K, R_cam, self.image_width_px, self.image_height_px
+            self.ax_img, K, R_cam, self.image_width_px, self.image_height_px, dist=dist
         )
         draw_world_origin_on_image(
-            self.ax_img, P, self.image_width_px, self.image_height_px
+            self.ax_img, P, self.image_width_px, self.image_height_px, K=K, dist=dist
         )
         if self.check_backproject.isChecked() and self._backproject_point_uv is not None:
-            u, v = self._backproject_point_uv
-            self.ax_img.scatter(u, v, c="orange", s=100, zorder=10, edgecolors="white", linewidths=2)
+            u, v = self._backproject_point_uv  # ideal (undistorted) coords
+            if _distortion_params_nonzero(*dist):
+                u_d, v_d = apply_distortion(u, v, K, *dist)
+            else:
+                u_d, v_d = u, v
+            self.ax_img.scatter(u_d, v_d, c="orange", s=100, zorder=10, edgecolors="white", linewidths=2)
             R_cw, t = self.state.get_R_and_t()
-            K = self.state.get_K()
             C, d = backproject_image_point_to_ray(u, v, K, R_cw, t)
             ray_scale = 8.0
             pt_far = C + ray_scale * d
