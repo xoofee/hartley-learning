@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .pinhole import project_one
+from .pinhole import project_one, project_one_affine
 
 
 def distortion_params_nonzero(k1: float, k2: float, k3: float, p1: float, p2: float) -> bool:
@@ -107,35 +107,41 @@ def polygon_3d_edges_to_distorted(
     p1: float,
     p2: float,
     n_samples_per_edge: int = 32,
+    affine: bool = False,
 ) -> np.ndarray:
     """
     Closed 3D polygon -> distorted polygon with curved edges and correct visibility.
     Samples each edge in 3D, clips to half-space in front of camera (w > 0), then projects and distorts.
+    If affine=True, uses affine (telecentric) projection and does not clip by depth.
     """
+    project_fn = project_one_affine if affine else project_one
     n = len(points_world)
     out = []
     for i in range(n):
         j = (i + 1) % n
         A, B = points_world[i], points_world[j]
-        u_a, v_a, w_a = project_one(P, A)
-        u_b, v_b, w_b = project_one(P, B)
-        if w_a <= 0 and w_b <= 0:
-            continue
-        if w_a > 0 and w_b > 0:
+        if affine:
             t_lo, t_hi = 0.0, 1.0
         else:
-            t_cross = w_a / (w_a - w_b) if (w_a - w_b) != 0 else 0.0
-            t_cross = max(0.0, min(1.0, t_cross))
-            if w_a > 0:
-                t_lo, t_hi = 0.0, t_cross
+            u_a, v_a, w_a = project_fn(P, A)
+            u_b, v_b, w_b = project_fn(P, B)
+            if w_a <= 0 and w_b <= 0:
+                continue
+            if w_a > 0 and w_b > 0:
+                t_lo, t_hi = 0.0, 1.0
             else:
-                t_lo, t_hi = t_cross, 1.0
+                t_cross = w_a / (w_a - w_b) if (w_a - w_b) != 0 else 0.0
+                t_cross = max(0.0, min(1.0, t_cross))
+                if w_a > 0:
+                    t_lo, t_hi = 0.0, t_cross
+                else:
+                    t_lo, t_hi = t_cross, 1.0
         n_pts = max(2, int(n_samples_per_edge * (t_hi - t_lo) + 0.5))
         for ki in range(n_pts):
             t = t_lo + (t_hi - t_lo) * (ki / (n_pts - 1)) if n_pts > 1 else t_lo
             Q = (1.0 - t) * A + t * B
-            u_ideal, v_ideal, w = project_one(P, Q)
-            if w <= 0:
+            u_ideal, v_ideal, w = project_fn(P, Q)
+            if not affine and w <= 0:
                 continue
             u_d, v_d = apply_distortion(u_ideal, v_ideal, K, k1, k2, k3, p1, p2)
             out.append([u_d, v_d])

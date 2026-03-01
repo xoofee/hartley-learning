@@ -86,3 +86,34 @@ def project_one(P: np.ndarray, point_world: np.ndarray) -> tuple[float, float, f
     u = x[0] / w
     v = x[1] / w
     return u, v, w
+
+
+def _affine_P(P: np.ndarray) -> np.ndarray:
+    """Return 3x4 affine projection matrix: first two rows of P, third row [0,0,0,1] (telecentric)."""
+    P_affine = P.copy()
+    # P_affine[2, :] = [0.0, 0.0, 0.0, 1.0]
+    P_affine[2, :3] = [0.0, 0.0, 0.0]
+
+    print('P:', P)
+    print('P_affine:', P_affine)
+
+    return P_affine
+
+
+def project_points_affine(P: np.ndarray, points_world: np.ndarray) -> np.ndarray:
+    """
+    Affine (telecentric) projection: (u, v) = (row0·X, row1·X), no division by depth.
+    points_world (N, 3) -> (N, 2). Uses P with third row forced to [0,0,0,1].
+    """
+    P_affine = _affine_P(P)
+    n = points_world.shape[0]
+    hom = np.hstack([points_world, np.ones((n, 1))])
+    x = (P_affine @ hom.T).T
+    return np.column_stack([x[:, 0], x[:, 1]])
+
+
+def project_one_affine(P: np.ndarray, point_world: np.ndarray) -> tuple[float, float, float]:
+    """Affine projection for one point; returns (u, v, 1.0) for API compatibility."""
+    P_affine = _affine_P(P)
+    x = P_affine @ np.append(point_world, 1.0)
+    return float(x[0]), float(x[1]), 1.0

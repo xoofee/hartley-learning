@@ -65,17 +65,29 @@ def draw_projected_scene(
     img_height: float,
     K: np.ndarray | None = None,
     dist: tuple[float, float, float, float, float] | None = None,
+    use_affine: bool = False,
 ) -> None:
     """Draw projected square, triangle, and rectangle on axes.
-    If K and dist are provided and non-zero, edges are sampled and distorted."""
-    sq_uv = pinhole.project_points(P, square_pts)
-    tri_uv = pinhole.project_points(P, triangle_pts)
-    rect_uv = pinhole.project_points(P, rectangle_pts)
+    If K and dist are provided and non-zero, edges are sampled and distorted.
+    If use_affine=True, use affine (telecentric) projection: no perspective divide."""
+    if use_affine:
+        project_pts = pinhole.project_points_affine
+    else:
+        project_pts = pinhole.project_points
+    sq_uv = project_pts(P, square_pts)
+    tri_uv = project_pts(P, triangle_pts)
+    rect_uv = project_pts(P, rectangle_pts)
     if K is not None and dist is not None and distortion.distortion_params_nonzero(*dist):
         k1, k2, k3, p1, p2 = dist
-        sq_uv = polygon_3d_edges_to_distorted(square_pts, P, K, k1, k2, k3, p1, p2)
-        tri_uv = polygon_3d_edges_to_distorted(triangle_pts, P, K, k1, k2, k3, p1, p2)
-        rect_uv = polygon_3d_edges_to_distorted(rectangle_pts, P, K, k1, k2, k3, p1, p2)
+        sq_uv = polygon_3d_edges_to_distorted(
+            square_pts, P, K, k1, k2, k3, p1, p2, affine=use_affine
+        )
+        tri_uv = polygon_3d_edges_to_distorted(
+            triangle_pts, P, K, k1, k2, k3, p1, p2, affine=use_affine
+        )
+        rect_uv = polygon_3d_edges_to_distorted(
+            rectangle_pts, P, K, k1, k2, k3, p1, p2, affine=use_affine
+        )
     ax.set_xlim(0, img_width)
     ax.set_ylim(img_height, 0)
     ax.set_aspect("equal")
@@ -86,6 +98,8 @@ def draw_projected_scene(
         ax.add_patch(Polygon(tri_uv, facecolor="red", edgecolor="darkred", alpha=0.8))
     if len(rect_uv) >= 3:
         ax.add_patch(Polygon(rect_uv, facecolor="blue", edgecolor="darkblue", alpha=0.8))
+
+    print('green square:', sq_uv)
 
 
 def vanishing_points_from_R_cw(
@@ -140,15 +154,22 @@ def draw_vanishing_points(
         )
 
 
-def world_origin_image_point(P: np.ndarray) -> np.ndarray | None:
-    """Image (u, v) of world origin from P: P @ [0,0,0,1] = P[:, 3]. Returns (2,) uv or None if not finite."""
+def world_origin_image_point(
+    P: np.ndarray, affine: bool = False
+) -> np.ndarray | None:
+    """Image (u, v) of world origin from P: P @ [0,0,0,1] = P[:, 3].
+    Perspective: (u,v) = (p0/p2, p1/p2). Affine: (u,v) = (p0, p1).
+    Returns (2,) uv or None if not finite."""
     p = P[:, 3]
-    if abs(p[2]) <= 1e-6:
-        return None
-    u, v = p[0] / p[2], p[1] / p[2]
+    if affine:
+        u, v = float(p[0]), float(p[1])
+    else:
+        if abs(p[2]) <= 1e-6:
+            return None
+        u, v = p[0] / p[2], p[1] / p[2]
+        if p[2] <= 0:
+            return None
     if not (np.isfinite(u) and np.isfinite(v)):
-        return None
-    if p[2] <= 0:
         return None
     return np.array([u, v])
 
@@ -161,9 +182,10 @@ def draw_world_origin_on_image(
     margin: float = 50.0,
     K: np.ndarray | None = None,
     dist: tuple[float, float, float, float, float] | None = None,
+    affine: bool = False,
 ) -> None:
     """Draw world origin image point in purple if finite and visible."""
-    uv = world_origin_image_point(P)
+    uv = world_origin_image_point(P, affine=affine)
     if uv is None:
         return
     u, v = uv[0], uv[1]

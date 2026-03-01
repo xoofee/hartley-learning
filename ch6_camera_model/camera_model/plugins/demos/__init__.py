@@ -12,6 +12,7 @@ from .none_demo import NoneDemo
 from .p_row_planes import PRowPlanesDemo
 from .backproject import BackprojectDemo
 from .angulometer import AngulometerDemo
+from .affine_telecentric import AffineTelecentricDemo
 
 
 def build_demos_button_group(parent) -> tuple[QGroupBox, QButtonGroup, dict[str, QPushButton]]:
@@ -35,11 +36,12 @@ def build_demos_button_group(parent) -> tuple[QGroupBox, QButtonGroup, dict[str,
 
 
 def register_builtin_demos() -> None:
-    """Register None, P row planes, Backproject, Angulometer demos."""
+    """Register None, P row planes, Backproject, Angulometer, Affine (telecentric) demos."""
     register_demo(NoneDemo())
     register_demo(PRowPlanesDemo())
     register_demo(BackprojectDemo())
     register_demo(AngulometerDemo())
+    register_demo(AffineTelecentricDemo())
 
 
 __all__ = [
@@ -47,6 +49,7 @@ __all__ = [
     "PRowPlanesDemo",
     "BackprojectDemo",
     "AngulometerDemo",
+    "AffineTelecentricDemo",
     "build_demos_button_group",
     "register_builtin_demos",
 ]

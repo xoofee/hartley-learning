@@ -353,6 +353,7 @@ class MainWindow(QMainWindow):
 
         K = self.state.get_K()
         dist = self.state.get_distortion()
+        use_affine = self._current_demo_id == "affine"
         rendering.draw_projected_scene(
             self.ax_img,
             P,
@@ -363,12 +364,14 @@ class MainWindow(QMainWindow):
             self.image_height_px,
             K=K,
             dist=dist,
+            use_affine=use_affine,
         )
-        rendering.draw_vanishing_points(
-            self.ax_img, K, R_cam, self.image_width_px, self.image_height_px, dist=dist
-        )
+        if not use_affine:
+            rendering.draw_vanishing_points(
+                self.ax_img, K, R_cam, self.image_width_px, self.image_height_px, dist=dist
+            )
         rendering.draw_world_origin_on_image(
-            self.ax_img, P, self.image_width_px, self.image_height_px, K=K, dist=dist
+            self.ax_img, P, self.image_width_px, self.image_height_px, K=K, dist=dist, affine=use_affine
         )
         if current_demo is not None:
             current_demo.on_draw_image(self.ax_img, context)

@@ -35,7 +35,7 @@ class CameraParamsWidget(QWidget):
         row += 1
         grid.addWidget(QLabel("sensor_width"), row, 0)
         self.spin_wphys = QDoubleSpinBox()
-        self.spin_wphys.setRange(0.1, 200.0)
+        self.spin_wphys.setRange(0.1, 20000.0)
         self.spin_wphys.setDecimals(2)
         self.spin_wphys.setSuffix(" mm")
         self.spin_wphys.setValue(state.sensor_width_mm)
@@ -44,7 +44,7 @@ class CameraParamsWidget(QWidget):
         row += 1
         grid.addWidget(QLabel("sensor_height"), row, 0)
         self.spin_hphys = QDoubleSpinBox()
-        self.spin_hphys.setRange(0.1, 200.0)
+        self.spin_hphys.setRange(0.1, 20000.0)
         self.spin_hphys.setDecimals(2)
         self.spin_hphys.setSuffix(" mm")
         self.spin_hphys.setValue(state.sensor_height_mm)
@@ -53,7 +53,7 @@ class CameraParamsWidget(QWidget):
         row += 1
         grid.addWidget(QLabel("pixel_size_x"), row, 0)
         self.spin_wpix = QDoubleSpinBox()
-        self.spin_wpix.setRange(0.0001, 1.0)
+        self.spin_wpix.setRange(0.0001, 100.0)
         self.spin_wpix.setDecimals(4)
         self.spin_wpix.setSuffix(" mm")
         self.spin_wpix.setValue(state.pixel_size_x_mm)
@@ -62,7 +62,7 @@ class CameraParamsWidget(QWidget):
         row += 1
         grid.addWidget(QLabel("pixel_size_y"), row, 0)
         self.spin_hpix = QDoubleSpinBox()
-        self.spin_hpix.setRange(0.0001, 1.0)
+        self.spin_hpix.setRange(0.0001, 100.0)
         self.spin_hpix.setDecimals(4)
         self.spin_hpix.setSuffix(" mm")
         self.spin_hpix.setValue(state.pixel_size_y_mm)
