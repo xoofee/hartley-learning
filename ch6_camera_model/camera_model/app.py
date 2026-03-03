@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QScrollArea,
+    QSplitter,
 )
 from PyQt5.QtCore import Qt
 
@@ -29,6 +30,7 @@ from . import state as state_module
 from . import geometry
 from . import rendering
 from . import distortion
+from .logging_ui import set_log_sink
 from .widgets import (
     MatrixDisplayWidget,
     MatrixEditWidget,
@@ -36,6 +38,8 @@ from .widgets import (
     DistortionParamsWidget,
     RotationParamsWidget,
     CameraCenterWidget,
+    LogOutputWidget,
+    ConsoleWidget,
 )
 from .plugins.registry import get_demo_by_id
 from .plugins.demos import register_builtin_demos, build_demos_button_group
@@ -67,7 +71,25 @@ class MainWindow(QMainWindow):
         self.ax_img = self.fig.add_subplot(122)
         self._set_3d_axes_limits_once()
         self.canvas = FigureCanvas(self.fig)
-        main_layout.addWidget(self.canvas, 1)
+
+        # Left: top = plot, bottom = log (left) + console (right)
+        left_split = QSplitter(Qt.Vertical)
+        left_split.addWidget(self.canvas)
+        bottom_split = QSplitter(Qt.Horizontal)
+        self.log_widget = LogOutputWidget(title="Log", show_clear_button=True)
+        set_log_sink(self.log_widget)
+        self.console_widget = ConsoleWidget(
+            namespace_getter=self._get_console_namespace,
+            title="Console",
+        )
+        bottom_split.addWidget(self.log_widget)
+        bottom_split.addWidget(self.console_widget)
+        bottom_split.setSizes([220, 280])
+        left_split.addWidget(bottom_split)
+        left_split.setStretchFactor(0, 1)
+        left_split.setStretchFactor(1, 1)
+        left_split.setSizes([350, 350])
+        main_layout.addWidget(left_split, 1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -159,6 +181,31 @@ class MainWindow(QMainWindow):
             "square_pts": self.square_pts,
             "triangle_pts": self.triangle_pts,
             "rectangle_pts": self.rectangle_pts,
+        }
+
+    def _get_console_namespace(self) -> dict:
+        """Namespace for the interactive console: P, K, R, t, state, axes, shapes, redraw."""
+        def redraw() -> None:
+            self.params_widget.sync_from_state()
+            self.rotation_widget.sync_from_state()
+            self.C_widget.sync_from_state()
+            self._update_matrix_displays()
+            self._draw_all()
+
+        return {
+            "state": self.state,
+            "P": self.state.get_P(),
+            "K": self.state.get_K(),
+            "R": self.state.get_R_and_t()[0],
+            "t": self.state.get_R_and_t()[1],
+            "fig": self.fig,
+            "ax3d": self.ax3d,
+            "ax_img": self.ax_img,
+            "square_pts": self.square_pts,
+            "triangle_pts": self.triangle_pts,
+            "rectangle_pts": self.rectangle_pts,
+            "redraw": redraw,
+            "np": np,
         }
 
     def _on_demo_clicked(self, demo_id: str) -> None:
