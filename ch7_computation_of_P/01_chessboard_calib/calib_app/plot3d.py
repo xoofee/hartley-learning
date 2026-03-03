@@ -19,7 +19,7 @@ from .state import AppState, CalibrationResult
 
 # Pyramid size: fixed height; base aspect from K (fx, fy). Scale so pyramid is visible but not huge.
 PYRAMID_HEIGHT = 0.4
-PYRAMID_SCALE = 150.0  # larger = wider pyramid for same K
+PYRAMID_SCALE = 50.0  # larger = wider pyramid for same K
 
 
 def camera_pyramid_from_K(

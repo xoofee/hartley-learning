@@ -55,7 +55,7 @@ class ImageViewWidget(QWidget):
         self._label = QLabel()
         self._label.setAlignment(Qt.AlignCenter)
         self._label.setMinimumSize(400, 300)
-        self._label.setStyleSheet("background-color: #1a1a1a; color: #666;")
+        self._label.setStyleSheet("background-color: #f0f0f0; color: #666;")
         self._label.setText("Select an image from the gallery or take a photo")
         self._label.setFrameStyle(QFrame.StyledPanel)
         layout.addWidget(self._label)
@@ -100,12 +100,14 @@ class MainWindow(QMainWindow):
         # Dock: Camera preview
         self._camera_preview = CameraPreviewWidget(on_capture=self._on_capture)
         dock_cam = QDockWidget("Camera preview", self)
+        dock_cam.setObjectName("CameraPreview")
         dock_cam.setWidget(self._camera_preview)
         self.addDockWidget(Qt.RightDockWidgetArea, dock_cam)
 
         # Dock: Gallery
         self._gallery = GalleryWidget(self._state.gallery_folder)
         dock_gal = QDockWidget("Gallery", self)
+        dock_gal.setObjectName("Gallery")
         dock_gal.setWidget(self._gallery)
         self.addDockWidget(Qt.RightDockWidgetArea, dock_gal)
 
@@ -113,6 +115,7 @@ class MainWindow(QMainWindow):
         self._log_widget = LogOutputWidget(title="Log", show_clear_button=True)
         set_log_sink(self._log_widget)
         dock_log = QDockWidget("Log", self)
+        dock_log.setObjectName("Log")
         dock_log.setWidget(self._log_widget)
         self.addDockWidget(Qt.BottomDockWidgetArea, dock_log)
 
@@ -122,12 +125,14 @@ class MainWindow(QMainWindow):
             get_gallery_paths=lambda: self._gallery.get_paths(),
         )
         dock_calib = QDockWidget("Calibration", self)
+        dock_calib.setObjectName("Calibration")
         dock_calib.setWidget(self._calib_widget)
         self.addDockWidget(Qt.RightDockWidgetArea, dock_calib)
 
         # Dock: 3D plot
         self._plot3d = Calib3DPlot(self._state)
         dock_3d = QDockWidget("3D plot", self)
+        dock_3d.setObjectName("Plot3D")
         dock_3d.setWidget(self._plot3d)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock_3d)
 
@@ -170,6 +175,14 @@ class MainWindow(QMainWindow):
             if saved_index < 0:
                 saved_index = None
         self._camera_preview.set_selected_camera_from_save(saved_device_id, saved_index)
+        # Resolution
+        try:
+            rw = int(settings.value("camera_resolution_width", -1))
+            rh = int(settings.value("camera_resolution_height", -1))
+        except (TypeError, ValueError):
+            rw = rh = -1
+        if rw > 0 and rh > 0:
+            self._camera_preview.set_selected_resolution_from_save(rw, rh)
 
     def _save_settings(self) -> None:
         """Save geometry, dock state, chessboard config, and camera selection."""
@@ -185,6 +198,10 @@ class MainWindow(QMainWindow):
             settings.setValue("camera_device_id", device_id)
         if opencv_index is not None:
             settings.setValue("camera_index", opencv_index)
+        res = self._camera_preview.get_selected_resolution_for_save()
+        if res is not None:
+            settings.setValue("camera_resolution_width", res[0])
+            settings.setValue("camera_resolution_height", res[1])
 
     def closeEvent(self, event) -> None:
         self._save_settings()

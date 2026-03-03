@@ -5,6 +5,9 @@ Single responsibility: display and manage calibration image gallery.
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -26,6 +29,22 @@ from PyQt5.QtWidgets import (
 
 
 THUMB_SIZE = 120
+
+
+def open_folder_in_explorer(path: Path) -> None:
+    """Open the given folder in the system file manager."""
+    path = Path(path).resolve()
+    if not path.is_dir():
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(path))
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+    except OSError:
+        pass
 
 
 def load_thumbnail(path: Path, size: int = THUMB_SIZE) -> Optional[QPixmap]:
@@ -113,6 +132,9 @@ class GalleryWidget(QWidget):
         reload_btn = QPushButton("Reload")
         reload_btn.clicked.connect(self.reload)
         header.addWidget(reload_btn)
+        open_folder_btn = QPushButton("Open folder")
+        open_folder_btn.clicked.connect(self._open_folder)
+        header.addWidget(open_folder_btn)
         header.addStretch()
         layout.addLayout(header)
         self._scroll = QScrollArea()
@@ -123,6 +145,10 @@ class GalleryWidget(QWidget):
         self._grid_layout = QGridLayout(self._grid_widget)
         self._scroll.setWidget(self._grid_widget)
         layout.addWidget(self._scroll)
+
+    def _open_folder(self) -> None:
+        """Open the gallery folder in the system file manager."""
+        open_folder_in_explorer(self._folder)
 
     def _clear_tiles(self) -> None:
         for t in self._tiles:

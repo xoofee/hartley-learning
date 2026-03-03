@@ -27,6 +27,16 @@ try:
 except ImportError:
     QCameraInfo = None  # type: ignore[misc, assignment]
 
+# Resolutions offered in the resolution combo (width, height)
+RESOLUTION_CHOICES = [
+    (3840, 2160),
+    (1920, 1080),
+    (1280, 800),
+    (1280, 720),
+    (1024, 768),
+    (640, 480),
+]
+
 
 def get_cameras_qt() -> List[Tuple[int, str, str]]:
     """
@@ -79,12 +89,17 @@ class CameraPreviewWidget(QWidget):
         self._preview_label = QLabel()
         self._preview_label.setMinimumSize(320, 240)
         self._preview_label.setAlignment(Qt.AlignCenter)
-        self._preview_label.setStyleSheet("background-color: #222; color: #888;")
+        self._preview_label.setStyleSheet("background-color: #f0f0f0; color: #666;")
         self._preview_label.setText("Preview off")
         self._preview_label.setFrameStyle(QFrame.StyledPanel)
         layout.addWidget(self._preview_label)
 
         btn_row = QHBoxLayout()
+        self._res_combo = QComboBox()
+        self._res_combo.setMinimumWidth(100)
+        for w, h in RESOLUTION_CHOICES:
+            self._res_combo.addItem(f"{w}×{h}", (w, h))
+        btn_row.addWidget(self._res_combo)
         self._start_btn = QPushButton("Start preview")
         self._start_btn.clicked.connect(self._toggle_preview)
         self._capture_btn = QPushButton("Take photo")
@@ -143,6 +158,23 @@ class CameraPreviewWidget(QWidget):
         if 0 <= combo_index < self._combo.count():
             self._combo.setCurrentIndex(combo_index)
 
+    def get_selected_resolution_for_save(self) -> Optional[Tuple[int, int]]:
+        """Return (width, height) of current resolution combo for persisting."""
+        data = self._res_combo.currentData()
+        if data is not None:
+            return data
+        return None
+
+    def set_selected_resolution_from_save(self, width: Optional[int], height: Optional[int]) -> None:
+        """Restore resolution combo to (width, height) if it exists in the list."""
+        if width is None or height is None:
+            return
+        for i in range(self._res_combo.count()):
+            data = self._res_combo.itemData(i)
+            if data is not None and data[0] == width and data[1] == height:
+                self._res_combo.setCurrentIndex(i)
+                break
+
     def _current_index(self) -> Optional[int]:
         if self._combo.count() == 0:
             return None
@@ -157,15 +189,27 @@ class CameraPreviewWidget(QWidget):
         else:
             self._start_preview()
 
+    def _selected_resolution(self) -> Tuple[int, int]:
+        """Return (width, height) for the current resolution combo selection."""
+        if self._res_combo.count() == 0:
+            return 1280, 720
+        data = self._res_combo.currentData()
+        if data is not None:
+            return data
+        return 1280, 720
+
     def _start_preview(self) -> None:
         idx = self._current_index()
         if idx is None:
             return
         if self._cap is not None:
             self._cap.release()
-        self._cap = cv2.VideoCapture(idx)
+        self._cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
         if not self._cap.isOpened():
             return
+        w, h = self._selected_resolution()
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
         self._timer.start(30)
         self._start_btn.setText("Stop preview")
         self._capture_btn.setEnabled(True)
@@ -188,14 +232,28 @@ class CameraPreviewWidget(QWidget):
             return
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w = frame_rgb.shape[:2]
+        if w <= 0 or h <= 0:
+            return
+        label_w = self._preview_label.width()
+        label_h = self._preview_label.height()
+        scale = min(label_w / w, label_h / h, 1.0)
+        if scale < 1.0:
+            nw, nh = int(w * scale), int(h * scale)
+            if nw < 1:
+                nw = 1
+            if nh < 1:
+                nh = 1
+            frame_rgb = cv2.resize(frame_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
+            h, w = nh, nw
+        display = frame_rgb.copy()
         bytes_per_line = 3 * w
         qimg = QImage(
-            frame_rgb.data,
+            display.data,
             w,
             h,
             bytes_per_line,
             QImage.Format_RGB888,
-        )
+        ).copy()
         self._preview_label.setPixmap(QPixmap.fromImage(qimg))
 
     def _capture(self) -> None:
