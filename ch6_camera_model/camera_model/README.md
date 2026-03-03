@@ -56,3 +56,13 @@ Demos area: **exclusive** buttons (only one demo active at a time). Each demo’
 Further demos (e.g. epipolar, binocular) can be added by implementing `Demo` and calling `register_demo()`; no changes to core app.
 
 P row planes and single-point backproject are refactored into the same exclusive demos (P row planes, Backproject).
+
+
+## 6 points P calculation
+demo name: "P from 6 points"
+use normalized (sqrt(3) ) dlt to get P from 6 points (for points on the ground z = 0 in a rectangle) 2 points in the air
+hide other shapes in this demo
+show 6 points in different color and add 1 to 6 number to indicate them
+print calculation error to the original P via the log function to the log widget
+
+
