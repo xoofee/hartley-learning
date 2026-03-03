@@ -18,15 +18,15 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout
 from .state import AppState, CalibrationResult
 
 # Pyramid size: fixed height; base aspect from K (fx, fy). Scale so pyramid is visible but not huge.
-PYRAMID_HEIGHT = 0.4
-PYRAMID_SCALE = 50.0  # larger = wider pyramid for same K
+PYRAMID_HEIGHT = 0.04
+PYRAMID_SCALE = 1.0  # larger = wider pyramid for same K
 
 
 def camera_pyramid_from_K(
     R_cam_to_world: np.ndarray,
     t_cam_to_world: np.ndarray,
     K: np.ndarray,
-    height: float = PYRAMID_HEIGHT,
+    height: float = PYRAMID_HEIGHT,     # height before scaling
     scale: float = PYRAMID_SCALE,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -36,12 +36,14 @@ def camera_pyramid_from_K(
     Base aspect and proportions consistent with K: height/bottom_width ~ fx, height/bottom_length ~ fy.
     """
     fx, fy = K[0, 0], K[1, 1]
+    tx, ty = K[0, 2], K[1, 2]
     if fx <= 0:
         fx = 1.0
     if fy <= 0:
         fy = 1.0
-    half_w = height * scale / fx
-    half_h = height * scale / fy
+    height = height * scale
+    half_w = height * 2 * tx / fx
+    half_h = height * 2 * ty / fy
     # In camera frame: apex at origin, base at z = height
     b1 = np.array([-half_w, -half_h, height])
     b2 = np.array([half_w, -half_h, height])

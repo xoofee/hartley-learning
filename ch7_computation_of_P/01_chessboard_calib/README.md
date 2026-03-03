@@ -62,3 +62,18 @@ python -m ch7_computation_of_P.01_chessboard_calib.run_calib_app
 ```
 
 Photos are stored in `01_chessboard_calib/calib_images/`. Use **Camera preview** to select a camera (non-zero indices listed first, often USB), start preview, and **Take photo** to capture. **Gallery** shows thumbnails; click to view in the central area, **Remove** to delete. Set **Chessboard** inner corners and square size, then **Calibrate from gallery** to get K, distortion, R/t per image and reprojection error in the **Log**. The **3D plot** shows the chessboard grid and camera pyramids (aspect from K, fixed height).
+
+# Applications
+
+## realtime camera pose
+now add this demos
+make it plugin pattern like ch6_camera_model\camera_model\plugins
+so that it is extensible and scalable and modular
+
+the first demo will be realtime pose (of camera)
+when this demo is turned on
+do not show the cabliration camera pose (pyramid) in the 3d view
+(still keep the chessboard)
+
+when camera preview is on
+detect the camera pose using the calibrated K and the realtime chessboard image
