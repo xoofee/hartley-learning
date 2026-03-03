@@ -10,9 +10,12 @@ import numpy as np
 
 def R_wc_from_yaw_pitch_roll_camera(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
     """
-    Build R_wb (3x3) which represents the orientation of the body in world coordinates.
+    Build R_wc (3x3) which represents the orientation of the body in world coordinates.
+    _wc: camera to world (R_wc.T is used to convert world to camera coordinates, R_wc is used to describle the camera orientation in world coordinates)
 
-    Camera axes: X right, Y down, Z forward.
+    This function(matrix) is STRONGLY dependent on the reference frame
+
+    Camera axes (reference frame): X right, Y down, Z forward.
     Rotations: yaw about +Y, pitch about +X, roll about +Z.
     Composition: R_wc = Ry(yaw) @ Rx(pitch) @ Rz(roll)
     """
@@ -42,7 +45,9 @@ def R_wb_from_yaw_pitch_roll_world(yaw_deg: float, pitch_deg: float, roll_deg: f
     """
     Build R_wb (3x3): orientation of body in world coordinates.
 
-    World axes: X right, Y forward, Z up.
+    This function(matrix) is STRONGLY dependent on the reference frame
+
+    World axes (reference frame): X right, Y forward, Z up.
     Rotations: yaw about +Z, pitch about +X, roll about +Y.
     Composition: R_wb = Rz(yaw) @ Rx(pitch) @ Ry(roll)
     """
