@@ -2,6 +2,7 @@
 Main window: dockable layout, camera preview, gallery, log, calibration, 3D plot.
 
 Composes all widgets; single place for dock setup and wiring.
+Saves/restores dock layout, geometry, camera selection, and chessboard config.
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import sys
 from pathlib import Path
 
 import cv2
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -30,6 +31,9 @@ from .gallery import GalleryWidget
 from .calibration import CalibrationWidget
 from .plot3d import Calib3DPlot
 from . import logging_ui
+
+SETTINGS_ORG = "hartley-learning"
+SETTINGS_APP = "chessboard_calib"
 
 
 def _next_capture_path(folder: Path) -> Path:
@@ -83,6 +87,7 @@ class MainWindow(QMainWindow):
         self._state.refresh_gallery_paths()
         self._init_ui()
         self._connect()
+        self._restore_settings()
 
     def _init_ui(self) -> None:
         self.setWindowTitle("Chessboard calibration")
@@ -132,6 +137,58 @@ class MainWindow(QMainWindow):
 
         logging_ui.log("Calibration app started. Add images and run Calibrate from gallery.")
         self._plot3d.redraw()
+
+    def _restore_settings(self) -> None:
+        """Restore geometry, dock state, chessboard config, and camera selection."""
+        settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        # Geometry and dock layout
+        geom = settings.value("geometry")
+        if geom is not None:
+            self.restoreGeometry(geom)
+        state = settings.value("windowState")
+        if state is not None:
+            self.restoreState(state)
+        # Chessboard: restore to state then sync UI
+        try:
+            cols = int(settings.value("chessboard_cols", self._state.chessboard.cols))
+            rows = int(settings.value("chessboard_rows", self._state.chessboard.rows))
+            square_size = float(settings.value("chessboard_square_size", self._state.chessboard.square_size))
+        except (TypeError, ValueError):
+            pass
+        else:
+            self._state.chessboard.cols = cols
+            self._state.chessboard.rows = rows
+            self._state.chessboard.square_size = square_size
+            self._calib_widget._params_widget.sync_from_params()
+        # Camera: restore by device_id or fallback index (cameras may have changed)
+        saved_device_id = settings.value("camera_device_id")
+        try:
+            saved_index = int(settings.value("camera_index", -1))
+        except (TypeError, ValueError):
+            saved_index = None
+        else:
+            if saved_index < 0:
+                saved_index = None
+        self._camera_preview.set_selected_camera_from_save(saved_device_id, saved_index)
+
+    def _save_settings(self) -> None:
+        """Save geometry, dock state, chessboard config, and camera selection."""
+        self._calib_widget._params_widget.apply_to_params()
+        settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("windowState", self.saveState())
+        settings.setValue("chessboard_cols", self._state.chessboard.cols)
+        settings.setValue("chessboard_rows", self._state.chessboard.rows)
+        settings.setValue("chessboard_square_size", self._state.chessboard.square_size)
+        device_id, opencv_index = self._camera_preview.get_selected_camera_for_save()
+        if device_id is not None:
+            settings.setValue("camera_device_id", device_id)
+        if opencv_index is not None:
+            settings.setValue("camera_index", opencv_index)
+
+    def closeEvent(self, event) -> None:
+        self._save_settings()
+        super().closeEvent(event)
 
     def _connect(self) -> None:
         self._gallery.image_selected.connect(self._on_gallery_image_selected)

@@ -1,12 +1,12 @@
 """
-Camera preview: enumerate cameras (prefer USB), start/stop preview, capture frame.
+Camera preview: enumerate cameras via Qt (no OpenCV probe), preview/capture via OpenCV.
 
-Single responsibility: camera enumeration, capture, and preview widget.
+Single responsibility: camera enumeration (QCameraInfo), capture, and preview widget.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -22,21 +22,26 @@ from PyQt5.QtWidgets import (
     QFrame,
 )
 
+try:
+    from PyQt5.QtMultimedia import QCameraInfo
+except ImportError:
+    QCameraInfo = None  # type: ignore[misc, assignment]
 
-def enumerate_cameras(max_index: int = 10) -> List[int]:
+
+def get_cameras_qt() -> List[Tuple[int, str, str]]:
     """
-    Return list of working camera indices. Prefer non-zero indices (often USB when 0 is integrated).
+    Return list of (opencv_index, display_name, device_id) using Qt's QCameraInfo.
+    device_id is info.deviceName() for save/restore when camera list changes.
     """
-    working = []
-    for i in range(max_index):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            ret, _ = cap.read()
-            cap.release()
-            if ret:
-                working.append(i)
-    # Prefer index > 0 (USB) over 0 (often integrated)
-    return sorted(working, key=lambda i: (i == 0, i))
+    if QCameraInfo is None:
+        return []
+    infos = QCameraInfo.availableCameras()
+    result: List[Tuple[int, str, str]] = []
+    for i, info in enumerate(infos):
+        name = info.description().strip() or info.deviceName() or f"Camera {i}"
+        device_id = info.deviceName() or ""
+        result.append((i, name, device_id))
+    return result
 
 
 class CameraPreviewWidget(QWidget):
@@ -52,6 +57,7 @@ class CameraPreviewWidget(QWidget):
         self._cap: Optional[cv2.VideoCapture] = None
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_timer)
+        self._camera_list: List[Tuple[int, str, str]] = []  # (opencv_index, display_name, device_id)
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -93,17 +99,57 @@ class CameraPreviewWidget(QWidget):
         was_running = self._timer.isActive()
         if was_running:
             self._stop_preview()
-        indices = enumerate_cameras()
+        self._camera_list = get_cameras_qt()
         self._combo.clear()
-        for i in indices:
-            self._combo.addItem(f"Camera {i}", i)
-        if indices and was_running:
+        for opencv_index, name, _ in self._camera_list:
+            self._combo.addItem(f"{name} ({opencv_index})", opencv_index)
+        if not self._camera_list:
+            self._combo.addItem("No cameras found", -1)
+        if self._camera_list and was_running:
             self._start_preview()
+
+    def get_selected_camera_for_save(self) -> Tuple[Optional[str], Optional[int]]:
+        """Return (device_id, opencv_index) for the current selection, for persisting."""
+        idx = self._current_index()
+        if idx is None:
+            return None, None
+        for opencv_index, _name, device_id in self._camera_list:
+            if opencv_index == idx:
+                return (device_id or None), opencv_index
+        return None, idx
+
+    def set_selected_camera_from_save(
+        self,
+        device_id: Optional[str],
+        fallback_index: Optional[int],
+    ) -> None:
+        """
+        Restore selection: prefer camera with device_id; else use fallback_index if in range.
+        Call after _refresh_cameras() so _camera_list is populated.
+        """
+        if not self._camera_list:
+            return
+        combo_index = 0
+        if device_id:
+            for i, (_idx, _name, did) in enumerate(self._camera_list):
+                if did == device_id:
+                    combo_index = i
+                    break
+        elif fallback_index is not None:
+            for i, (idx, _name, _did) in enumerate(self._camera_list):
+                if idx == fallback_index:
+                    combo_index = i
+                    break
+        if 0 <= combo_index < self._combo.count():
+            self._combo.setCurrentIndex(combo_index)
 
     def _current_index(self) -> Optional[int]:
         if self._combo.count() == 0:
             return None
-        return self._combo.currentData()
+        idx = self._combo.currentData()
+        if idx is None or idx < 0:
+            return None
+        return int(idx)
 
     def _toggle_preview(self) -> None:
         if self._timer.isActive():
