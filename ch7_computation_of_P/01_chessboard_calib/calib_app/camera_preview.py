@@ -10,7 +10,7 @@ from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QWidget,
@@ -56,6 +56,8 @@ def get_cameras_qt() -> List[Tuple[int, str, str]]:
 
 class CameraPreviewWidget(QWidget):
     """Camera selection, start/stop preview, and capture button."""
+
+    frame_available = pyqtSignal(object)  # BGR frame (numpy array) when preview is running
 
     def __init__(
         self,
@@ -175,6 +177,41 @@ class CameraPreviewWidget(QWidget):
                 self._res_combo.setCurrentIndex(i)
                 break
 
+    def set_frame_to_show(self, frame_bgr: Optional[np.ndarray]) -> None:
+        """Display a BGR frame (scaled to fit, aspect ratio preserved). None = show placeholder."""
+        if frame_bgr is None or frame_bgr.size == 0:
+            self._preview_label.setText("Preview off")
+            self._preview_label.setPixmap(QPixmap())
+            return
+        if len(frame_bgr.shape) == 2:
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_GRAY2RGB)
+        else:
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        h, w = frame_rgb.shape[:2]
+        if w <= 0 or h <= 0:
+            return
+        label_w = self._preview_label.width()
+        label_h = self._preview_label.height()
+        scale = min(label_w / w, label_h / h, 1.0)
+        if scale < 1.0:
+            nw, nh = int(w * scale), int(h * scale)
+            if nw < 1:
+                nw = 1
+            if nh < 1:
+                nh = 1
+            frame_rgb = cv2.resize(frame_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
+            h, w = nh, nw
+        bytes_per_line = 3 * w
+        qimg = QImage(
+            frame_rgb.data,
+            w,
+            h,
+            bytes_per_line,
+            QImage.Format_RGB888,
+        ).copy()
+        self._preview_label.setPixmap(QPixmap.fromImage(qimg))
+        self._preview_label.setText("")
+
     def _current_index(self) -> Optional[int]:
         if self._combo.count() == 0:
             return None
@@ -230,31 +267,8 @@ class CameraPreviewWidget(QWidget):
         ret, frame = self._cap.read()
         if not ret:
             return
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w = frame_rgb.shape[:2]
-        if w <= 0 or h <= 0:
-            return
-        label_w = self._preview_label.width()
-        label_h = self._preview_label.height()
-        scale = min(label_w / w, label_h / h, 1.0)
-        if scale < 1.0:
-            nw, nh = int(w * scale), int(h * scale)
-            if nw < 1:
-                nw = 1
-            if nh < 1:
-                nh = 1
-            frame_rgb = cv2.resize(frame_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
-            h, w = nh, nw
-        display = frame_rgb.copy()
-        bytes_per_line = 3 * w
-        qimg = QImage(
-            display.data,
-            w,
-            h,
-            bytes_per_line,
-            QImage.Format_RGB888,
-        ).copy()
-        self._preview_label.setPixmap(QPixmap.fromImage(qimg))
+        self.frame_available.emit(frame)
+        # Display is updated by the main window via set_frame_to_show (raw or processed)
 
     def _capture(self) -> None:
         if self._cap is None or not self._cap.isOpened():

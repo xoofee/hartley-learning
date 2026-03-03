@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -45,6 +45,9 @@ class AppState:
         self.chessboard = ChessboardParams()
         self.calibration: CalibrationResult | None = None
         self.selected_image_path: Path | None = None  # for main view
+        self.current_demo_id: str = "none"
+        self.realtime_pose: Optional[Tuple[np.ndarray, np.ndarray]] = None  # (R_cam_to_world, t_cam_to_world)
+        self.realtime_display_frame: Optional[np.ndarray] = None  # BGR frame to show in central view (realtime pose demo)
 
     def refresh_gallery_paths(self) -> List[Path]:
         """Scan gallery folder for images; update self.image_paths; return list."""

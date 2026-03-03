@@ -16,6 +16,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 
 from .state import AppState, CalibrationResult
+from .plugins.registry import get_demo_by_id
 
 # Pyramid size: fixed height; base aspect from K (fx, fy). Scale so pyramid is visible but not huge.
 PYRAMID_HEIGHT = 0.04
@@ -143,38 +144,64 @@ class Calib3DPlot(QWidget):
         draw_axes(self._ax, R_id, t_id, length=cb.square_size * 2)
         # Chessboard grid
         draw_chessboard_grid(self._ax, cb.cols, cb.rows, cb.square_size)
-        cal = self._state.calibration
-        if cal is not None:
-            for rvec, tvec in zip(cal.rvecs, cal.tvecs):
-                R_cam, _ = cv2.Rodrigues(rvec)
-                # OpenCV: R, t map world -> camera. So camera center in world C = -R.T @ t
-                C = (-R_cam.T @ tvec).ravel()
-                R_cam_to_world = R_cam.T
-                t_cam_to_world = C
-                base_w, apex_w = camera_pyramid_from_K(
-                    R_cam_to_world,
-                    t_cam_to_world,
-                    cal.K,
-                )
-                verts = [
-                    [apex_w, base_w[0], base_w[1]],
-                    [apex_w, base_w[1], base_w[2]],
-                    [apex_w, base_w[2], base_w[3]],
-                    [apex_w, base_w[3], base_w[0]],
-                    [base_w[0], base_w[1], base_w[2], base_w[3]],
-                ]
-                self._ax.add_collection3d(
-                    Poly3DCollection(
-                        verts,
-                        facecolors="cyan",
-                        edgecolors="blue",
-                        alpha=0.4,
+        current_demo = get_demo_by_id(self._state.current_demo_id)
+        hide_calibration = current_demo is not None and current_demo.hide_calibration_pyramids()
+        if not hide_calibration:
+            cal = self._state.calibration
+            if cal is not None:
+                for rvec, tvec in zip(cal.rvecs, cal.tvecs):
+                    R_cam, _ = cv2.Rodrigues(rvec)
+                    C = (-R_cam.T @ tvec).ravel()
+                    R_cam_to_world = R_cam.T
+                    t_cam_to_world = C
+                    base_w, apex_w = camera_pyramid_from_K(
+                        R_cam_to_world,
+                        t_cam_to_world,
+                        cal.K,
                     )
+                    verts = [
+                        [apex_w, base_w[0], base_w[1]],
+                        [apex_w, base_w[1], base_w[2]],
+                        [apex_w, base_w[2], base_w[3]],
+                        [apex_w, base_w[3], base_w[0]],
+                        [base_w[0], base_w[1], base_w[2], base_w[3]],
+                    ]
+                    self._ax.add_collection3d(
+                        Poly3DCollection(
+                            verts,
+                            facecolors="cyan",
+                            edgecolors="blue",
+                            alpha=0.4,
+                        )
+                    )
+                    draw_axes(self._ax, R_cam_to_world, t_cam_to_world, length=PYRAMID_HEIGHT * 1.5)
+        if self._state.realtime_pose is not None and self._state.calibration is not None:
+            R_cam_to_world, t_cam_to_world = self._state.realtime_pose
+            base_w, apex_w = camera_pyramid_from_K(
+                R_cam_to_world,
+                t_cam_to_world,
+                self._state.calibration.K,
+            )
+            verts = [
+                [apex_w, base_w[0], base_w[1]],
+                [apex_w, base_w[1], base_w[2]],
+                [apex_w, base_w[2], base_w[3]],
+                [apex_w, base_w[3], base_w[0]],
+                [base_w[0], base_w[1], base_w[2], base_w[3]],
+            ]
+            self._ax.add_collection3d(
+                Poly3DCollection(
+                    verts,
+                    facecolors="lime",
+                    edgecolors="green",
+                    alpha=0.5,
                 )
-                draw_axes(self._ax, R_cam_to_world, t_cam_to_world, length=PYRAMID_HEIGHT * 1.5)
+            )
+            draw_axes(self._ax, R_cam_to_world, t_cam_to_world, length=PYRAMID_HEIGHT * 1.5)
         self._ax.set_xlabel("X")
         self._ax.set_ylabel("Y")
         self._ax.set_zlabel("Z")
         self._ax.set_title("Chessboard and camera poses")
-        self._set_axes_limits()
+        # self._set_axes_limits()
+        self._ax.set_box_aspect((1, 1, 1))
         self._canvas.draw_idle()

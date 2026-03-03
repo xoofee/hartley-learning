@@ -21,10 +21,22 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QGroupBox,
     QFormLayout,
+    QPlainTextEdit,
 )
 
 from .state import AppState, CalibrationResult, ChessboardParams
 from . import logging_ui
+
+
+def reorder_corners_if_needed(corners: np.ndarray) -> np.ndarray:
+    """Reorder corners so they start from top-left (first corner has smaller x,y than last)."""
+    pts = corners.reshape(-1, 2)
+    first = pts[0]
+    last = pts[-1]
+    # If first corner is lower-right of last corner, we are flipped.
+    if first[0] > last[0] and first[1] > last[1]:
+        pts = pts[::-1]
+    return pts.reshape(-1, 1, 2)
 
 
 def find_chessboard_corners(
@@ -42,6 +54,7 @@ def find_chessboard_corners(
     if found:
         term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-3)
         corners = cv2.cornerSubPix(gray, corners, (5, 5), (-1, -1), term)
+        corners = reorder_corners_if_needed(corners)
     return corners, found
 
 
@@ -167,7 +180,34 @@ class CalibrationWidget(QWidget):
         self._calibrate_btn = QPushButton("Calibrate from gallery")
         self._calibrate_btn.clicked.connect(self._run_calibration)
         layout.addWidget(self._calibrate_btn)
+        result_group = QGroupBox("Last calibration (K & distortion)")
+        self._result_text = QPlainTextEdit()
+        self._result_text.setReadOnly(True)
+        self._result_text.setMaximumBlockCount(500)
+        self._result_text.setPlaceholderText("Run calibration or load from saved settings.")
+        result_group_layout = QVBoxLayout()
+        result_group_layout.addWidget(self._result_text)
+        result_group.setLayout(result_group_layout)
+        layout.addWidget(result_group)
         layout.addStretch()
+
+    def refresh_calibration_display(self) -> None:
+        """Update the K & distortion display from state.calibration."""
+        cal = self._state.calibration
+        if cal is None:
+            self._result_text.setPlainText("")
+            return
+        lines = ["K (3×3):"]
+        for row in cal.K:
+            lines.append("  " + "  ".join(f"{x:.4f}" for x in row))
+        d = cal.dist.ravel()
+        lines.append("Distortion (k1, k2, p1, p2, k3, ...):")
+        lines.append("  " + "  ".join(f"{x:.6f}" for x in d[: min(8, len(d))]))
+        if cal.reproj_err != 0.0 or cal.image_paths:
+            lines.append(f"Reprojection error: {cal.reproj_err:.6f}")
+            if cal.image_paths:
+                lines.append(f"Images used: {len(cal.image_paths)}")
+        self._result_text.setPlainText("\n".join(lines))
 
     def _run_calibration(self) -> None:
         self._params_widget.apply_to_params()
@@ -182,4 +222,5 @@ class CalibrationWidget(QWidget):
             return
         self._state.calibration = result
         log_calibration_result(result)
+        self.refresh_calibration_display()
         self.calibration_done.emit()
