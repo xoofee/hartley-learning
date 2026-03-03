@@ -47,15 +47,8 @@ class ConsoleWidget(QWidget):
         self._te.setFont(QFont("Consolas", 9))
         self._te.setPlainText(">>> ")
         self._input_start_pos = 4
-        self._te.cursorPositionChanged.connect(self._clamp_cursor)
         self._te.installEventFilter(self)
         layout.addWidget(self._te)
-
-    def _clamp_cursor(self) -> None:
-        c = self._te.textCursor()
-        if c.position() < self._input_start_pos:
-            c.setPosition(self._input_start_pos)
-            self._te.setTextCursor(c)
 
     def _get_input_text(self) -> str:
         doc = self._te.document()
@@ -108,10 +101,28 @@ class ConsoleWidget(QWidget):
                     self._buffer = ""
                 self._replace_input_region(new_content, prompt)
                 return True
-            if key == Qt.Key_Backspace and pos <= self._input_start_pos:
-                return True
-            if key == Qt.Key_Delete and pos < self._input_start_pos:
-                return True
+            # Block editing in history; allow selection (so history is copyable)
+            if key == Qt.Key_Backspace:
+                if pos <= self._input_start_pos or cursor.anchor() < self._input_start_pos:
+                    return True
+            elif key == Qt.Key_Delete:
+                if pos < self._input_start_pos or cursor.anchor() < self._input_start_pos:
+                    return True
+            elif event.text():
+                # Character input: if selection, append at end of input; if in history, move to input
+                c = self._te.textCursor()
+                if c.hasSelection():
+                    c.movePosition(QTextCursor.End, QTextCursor.MoveAnchor)
+                    self._te.setTextCursor(c)
+                elif pos < self._input_start_pos:
+                    c.setPosition(self._input_start_pos)
+                    self._te.setTextCursor(c)
+            elif (event.modifiers() & Qt.ControlModifier) and key in (Qt.Key_V, Qt.Key_X):
+                # Paste/cut: if cursor in history, move to input area
+                if pos < self._input_start_pos:
+                    c = self._te.textCursor()
+                    c.setPosition(self._input_start_pos)
+                    self._te.setTextCursor(c)
         return super().eventFilter(obj, event)
 
     def append_plain_text(self, text: str) -> None:

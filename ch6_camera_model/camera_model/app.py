@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
 
     def init_ui(self) -> None:
-        self.setWindowTitle("Camera simulation (P = K [R|t])")
+        self.setWindowTitle("Camera Geometry")
         self.setGeometry(80, 80, 1400, 700)
         central = QWidget()
         self.setCentralWidget(central)
