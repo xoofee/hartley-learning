@@ -1,0 +1,5 @@
+# Chessboard calibration app
+numpy>=1.20
+opencv-python>=4.5
+PyQt5>=5.15
+matplotlib>=3.5

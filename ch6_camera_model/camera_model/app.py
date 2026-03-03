@@ -363,26 +363,29 @@ class MainWindow(QMainWindow):
         self.ax3d.add_collection3d(
             Poly3DCollection(verts_pyramid, facecolors="cyan", edgecolors="blue", alpha=0.4)
         )
-        self.ax3d.scatter(
-            self.square_pts[:, 0], self.square_pts[:, 1], self.square_pts[:, 2], c="green", s=20
-        )
-        self.ax3d.scatter(
-            self.triangle_pts[:, 0], self.triangle_pts[:, 1], self.triangle_pts[:, 2], c="red", s=20
-        )
-        self.ax3d.scatter(
-            self.rectangle_pts[:, 0],
-            self.rectangle_pts[:, 1],
-            self.rectangle_pts[:, 2],
-            c="blue",
-            s=20,
-        )
-        self.ax3d.scatter([0], [0], [0], c="purple", s=80, zorder=5, edgecolors="white", linewidths=1.5)
-        sq_edges = np.vstack([self.square_pts, self.square_pts[0:1]])
-        tri_edges = np.vstack([self.triangle_pts, self.triangle_pts[0:1]])
-        rect_edges = np.vstack([self.rectangle_pts, self.rectangle_pts[0:1]])
-        self.ax3d.plot(sq_edges[:, 0], sq_edges[:, 1], sq_edges[:, 2], "g-", lw=2)
-        self.ax3d.plot(tri_edges[:, 0], tri_edges[:, 1], tri_edges[:, 2], "r-", lw=2)
-        self.ax3d.plot(rect_edges[:, 0], rect_edges[:, 1], rect_edges[:, 2], "b-", lw=2)
+        context = self._get_context()
+        current_demo = get_demo_by_id(self._current_demo_id)
+        hide_shapes = current_demo is not None and current_demo.hide_scene_shapes()
+        if not hide_shapes:
+            self.ax3d.scatter(
+                self.square_pts[:, 0], self.square_pts[:, 1], self.square_pts[:, 2], c="green", s=20
+            )
+            self.ax3d.scatter(
+                self.triangle_pts[:, 0], self.triangle_pts[:, 1], self.triangle_pts[:, 2], c="red", s=20
+            )
+            self.ax3d.scatter(
+                self.rectangle_pts[:, 0],
+                self.rectangle_pts[:, 1],
+                self.rectangle_pts[:, 2],
+                c="blue",
+                s=20,
+            )
+            sq_edges = np.vstack([self.square_pts, self.square_pts[0:1]])
+            tri_edges = np.vstack([self.triangle_pts, self.triangle_pts[0:1]])
+            rect_edges = np.vstack([self.rectangle_pts, self.rectangle_pts[0:1]])
+            self.ax3d.plot(sq_edges[:, 0], sq_edges[:, 1], sq_edges[:, 2], "g-", lw=2)
+            self.ax3d.plot(tri_edges[:, 0], tri_edges[:, 1], tri_edges[:, 2], "r-", lw=2)
+            self.ax3d.plot(rect_edges[:, 0], rect_edges[:, 1], rect_edges[:, 2], "b-", lw=2)
         self.ax3d.set_xlabel("X")
         self.ax3d.set_ylabel("Y")
         self.ax3d.set_zlabel("Z")
@@ -393,20 +396,23 @@ class MainWindow(QMainWindow):
         rx, ry, rz = xlim[1] - xlim[0], ylim[1] - ylim[0], zlim[1] - zlim[0]
         self.ax3d.set_box_aspect((rx, ry, rz))
 
-        context = self._get_context()
-        current_demo = get_demo_by_id(self._current_demo_id)
         if current_demo is not None:
             current_demo.on_draw_3d(self.ax3d, context)
 
         K = self.state.get_K()
         dist = self.state.get_distortion()
         use_affine = self._current_demo_id == "affine"
+        if hide_shapes:
+            empty_pts = np.empty((0, 3))
+            scene_sq, scene_tri, scene_rect = empty_pts, empty_pts, empty_pts
+        else:
+            scene_sq, scene_tri, scene_rect = self.square_pts, self.triangle_pts, self.rectangle_pts
         rendering.draw_projected_scene(
             self.ax_img,
             P,
-            self.square_pts,
-            self.triangle_pts,
-            self.rectangle_pts,
+            scene_sq,
+            scene_tri,
+            scene_rect,
             self.image_width_px,
             self.image_height_px,
             K=K,
@@ -417,9 +423,6 @@ class MainWindow(QMainWindow):
             rendering.draw_vanishing_points(
                 self.ax_img, K, R_cam, self.image_width_px, self.image_height_px, dist=dist
             )
-        rendering.draw_world_origin_on_image(
-            self.ax_img, P, self.image_width_px, self.image_height_px, K=K, dist=dist, affine=use_affine
-        )
         if current_demo is not None:
             current_demo.on_draw_image(self.ax_img, context)
 

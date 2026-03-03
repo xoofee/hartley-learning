@@ -82,6 +82,10 @@ class Demo:
         """If True, app will connect image-plot mouse events and dispatch to this demo."""
         return False
 
+    def hide_scene_shapes(self) -> bool:
+        """If True, app will not draw the default scene shapes (square, triangle, rectangle)."""
+        return False
+
     def on_draw_3d(self, ax3d, context: dict) -> None:
         """Draw on 3D axes (only called when this demo is active)."""
         pass
