@@ -5,9 +5,10 @@ Each demo is independent; when its button is off, on_deactivated() releases all 
 """
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QButtonGroup, QPushButton
+from PyQt5.QtWidgets import QGroupBox, QButtonGroup, QPushButton
 
 from ..registry import register_demo, get_demos
+from ...widgets import FlowLayout
 from .none_demo import NoneDemo
 from .p_row_planes import PRowPlanesDemo
 from .backproject import BackprojectDemo
@@ -18,7 +19,7 @@ from .affine_telecentric import AffineTelecentricDemo
 def build_demos_button_group(parent) -> tuple[QGroupBox, QButtonGroup, dict[str, QPushButton]]:
     """Create a Demos group with exclusive buttons. Returns (group_widget, button_group, id_to_button)."""
     group = QGroupBox("Demos")
-    layout = QVBoxLayout()
+    layout = FlowLayout()
     button_group = QButtonGroup(parent)
     button_group.setExclusive(True)
     id_to_button: dict[str, QPushButton] = {}
