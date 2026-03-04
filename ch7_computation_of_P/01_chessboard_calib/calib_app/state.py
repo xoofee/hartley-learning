@@ -38,7 +38,7 @@ class AppState:
 
     def __init__(self, gallery_folder: Path | None = None):
         if gallery_folder is None:
-            gallery_folder = Path(__file__).resolve().parent.parent / "calib_images"
+            gallery_folder = Path(__file__).resolve().parent.parent / "images" / "calib"
         self.gallery_folder = Path(gallery_folder)
         self.gallery_folder.mkdir(parents=True, exist_ok=True)
         self.image_paths: List[Path] = []

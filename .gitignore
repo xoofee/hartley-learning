@@ -1,4 +1,5 @@
 *.pyc
 screens/
-ch7_computation_of_P/01_chessboard_calib/calib_images/
+
+ch7_computation_of_P/01_chessboard_calib/images
 

@@ -77,3 +77,34 @@ do not show the cabliration camera pose (pyramid) in the 3d view
 
 when camera preview is on
 detect the camera pose using the calibrated K and the realtime chessboard image
+
+# gallery refactor
+rename the current gallery to a reusable dockable gallery 
+and add a capture button to capture image photos to this calibration gallery and the folder
+
+when click the thumbnail in the gallery, show the image in the centerwidget like any multi-document editor. make it closable by x button just in the same way as any multi-document desktop application
+
+for the current calibration gallery, it saves to ch7_computation_of_P\01_chessboard_calib\images\calib
+
+add a new gallery "work"
+which bind to  ch7_computation_of_P\01_chessboard_calib\images\work
+
+remove the original take phone button
+because we already have a work gallery that could take photos
+
+
+# demo "rotate image"
+
+then add a demo to rotate image. When the "camera rotate" is on, and any image from the work opened in the centerwidget
+the user could drag the image to rotate it.
+the transform is H = K*R*inv(K)
+R is from yaw/pitch of the camera. yaw pitch is get from the mouse drag. roll is always 0
+
+just mimic the behavior of street view of google or any other ar app of panorama/photosphere:
+the current mouse position and the start position could determine the R (with K). The yaw / pitch is not necessary to get R, you may just get R without calculation yaw pitch if you think it is appropriate
+this make the point under the mouse always be the same point
+
+
+use the K load from saved. is K is not available, warn the user and return to last demo or none demo
+
+
