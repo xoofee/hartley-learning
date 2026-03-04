@@ -119,7 +119,9 @@ class RotateImageDemo(Demo):
             sx, sy = self._start_xy
             d0 = self._K_inv @ np.array([sx, sy, 1.0], dtype=np.float64)
             d0 = d0 / (np.linalg.norm(d0) + 1e-10)
-            R_delta = _rotation_from_d1_to_d2(d0, d)
+            # Drag rotates the view (reversal of camera rotate): point under mouse stays under mouse.
+            # So R maps current ray to start ray: R @ d = d0 (content moves with drag).
+            R_delta = _rotation_from_d1_to_d2(d, d0)
             self._accumulated_R = R_delta @ self._accumulated_R
             # H maps display coords to source: p_src = H @ p_dst, so H = K @ R.T @ inv(K)
             H = self._K @ self._accumulated_R.T @ self._K_inv

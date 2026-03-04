@@ -102,7 +102,8 @@ R is from yaw/pitch of the camera. yaw pitch is get from the mouse drag. roll is
 
 just mimic the behavior of street view of google or any other ar app of panorama/photosphere:
 the current mouse position and the start position could determine the R (with K). The yaw / pitch is not necessary to get R, you may just get R without calculation yaw pitch if you think it is appropriate
-this make the point under the mouse always be the same point
+
+this make the point under the mouse always be the same point. so the mouse move is in opposite of camera actual move
 
 
 use the K load from saved. is K is not available, warn the user and return to last demo or none demo

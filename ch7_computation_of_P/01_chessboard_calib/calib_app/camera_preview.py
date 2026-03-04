@@ -55,9 +55,10 @@ def get_cameras_qt() -> List[Tuple[int, str, str]]:
 
 
 class CameraPreviewWidget(QWidget):
-    """Camera selection, start/stop preview, and capture button."""
+    """Camera selection and start/stop preview."""
 
     frame_available = pyqtSignal(object)  # BGR frame (numpy array) when preview is running
+    preview_running_changed = pyqtSignal(bool)  # True when preview started, False when stopped
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -240,6 +241,7 @@ class CameraPreviewWidget(QWidget):
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
         self._timer.start(30)
         self._start_btn.setText("Stop preview")
+        self.preview_running_changed.emit(True)
 
     def _stop_preview(self) -> None:
         self._timer.stop()
@@ -249,6 +251,7 @@ class CameraPreviewWidget(QWidget):
         self._start_btn.setText("Start preview")
         self._preview_label.setText("Preview off")
         self._preview_label.setPixmap(QPixmap())
+        self.preview_running_changed.emit(False)
 
     def _on_timer(self) -> None:
         if self._cap is None or not self._cap.isOpened():

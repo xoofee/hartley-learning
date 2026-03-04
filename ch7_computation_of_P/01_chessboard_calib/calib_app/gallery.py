@@ -135,10 +135,12 @@ class GalleryWidget(QWidget):
         reload_btn = QPushButton("Reload")
         reload_btn.clicked.connect(self.reload)
         header.addWidget(reload_btn)
+        self._capture_btn = None
         if self._on_capture_requested is not None:
-            capture_btn = QPushButton("Capture")
-            capture_btn.clicked.connect(self._request_capture)
-            header.addWidget(capture_btn)
+            self._capture_btn = QPushButton("Capture")
+            self._capture_btn.setEnabled(False)
+            self._capture_btn.clicked.connect(self._request_capture)
+            header.addWidget(self._capture_btn)
         open_folder_btn = QPushButton("Open folder")
         open_folder_btn.clicked.connect(self._open_folder)
         header.addWidget(open_folder_btn)
@@ -152,6 +154,11 @@ class GalleryWidget(QWidget):
         self._grid_layout = QGridLayout(self._grid_widget)
         self._scroll.setWidget(self._grid_widget)
         layout.addWidget(self._scroll)
+
+    def set_capture_enabled(self, enabled: bool) -> None:
+        """Enable or disable the Capture button (e.g. when preview is on/off)."""
+        if self._capture_btn is not None:
+            self._capture_btn.setEnabled(enabled)
 
     def _request_capture(self) -> None:
         """Ask main window to save current camera frame to this gallery's folder."""

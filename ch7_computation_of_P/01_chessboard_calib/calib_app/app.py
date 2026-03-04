@@ -25,6 +25,9 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QTabWidget,
     QSizePolicy,
+    QMenuBar,
+    QMenu,
+    QAction,
 )
 
 from .state import AppState
@@ -326,6 +329,33 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(dock_work_gal, dock_calib)
         self.tabifyDockWidget(dock_calib, dock_demos)
 
+        # View menu: one checkable action per dock (persistence via windowState)
+        self._docks_by_name: dict[str, QDockWidget] = {}
+        self._dock_visibility_actions: dict[str, QAction] = {}
+        view_menu = QMenu("&View", self)
+        dock_list = [
+            (dock_cam, "Camera preview"),
+            (dock_calib_gal, "Calibration gallery"),
+            (dock_work_gal, "Work gallery"),
+            (dock_log, "Log"),
+            (dock_calib, "Calibration"),
+            (dock_3d, "3D plot"),
+            (dock_demos, "Demos"),
+        ]
+        for dock, label in dock_list:
+            name = dock.objectName()
+            self._docks_by_name[name] = dock
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(True)
+            action.triggered.connect(lambda checked, d=dock: d.setVisible(checked))
+            dock.visibilityChanged.connect(lambda visible, a=action: a.setChecked(visible))
+            view_menu.addAction(action)
+            self._dock_visibility_actions[name] = action
+        menu_bar = QMenuBar(self)
+        menu_bar.addMenu(view_menu)
+        self.setMenuBar(menu_bar)
+
         self._rotate_event_filter = _RotateDemoEventFilter(self)
         logging_ui.log("Calibration app started. Add images and run Calibrate from gallery.")
         self._plot3d.redraw()
@@ -340,6 +370,10 @@ class MainWindow(QMainWindow):
         state = settings.value("windowState")
         if state is not None:
             self.restoreState(state)
+            for name, action in self._dock_visibility_actions.items():
+                dock = self._docks_by_name.get(name)
+                if dock is not None:
+                    action.setChecked(dock.isVisible())
         # Chessboard: restore to state then sync UI
         try:
             cols = int(settings.value("chessboard_cols", self._state.chessboard.cols))
@@ -428,6 +462,7 @@ class MainWindow(QMainWindow):
         self._gallery_work.image_selected.connect(self._on_gallery_image_selected)
         self._calib_widget.calibration_done.connect(self._on_calibration_done)
         self._camera_preview.frame_available.connect(self._on_preview_frame)
+        self._camera_preview.preview_running_changed.connect(self._on_preview_running_changed)
 
     def _get_demo_context(self) -> dict:
         return {
@@ -477,6 +512,10 @@ class MainWindow(QMainWindow):
             self._camera_preview.set_frame_to_show(frame)
         if self._state.current_demo_id == "realtime_pose":
             self._plot3d.redraw()
+
+    def _on_preview_running_changed(self, running: bool) -> None:
+        self._gallery_calib.set_capture_enabled(running)
+        self._gallery_work.set_capture_enabled(running)
 
     def _on_capture_requested(self, folder: Path) -> None:
         """Save current camera frame to the given gallery folder."""
