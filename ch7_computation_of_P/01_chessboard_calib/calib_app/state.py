@@ -48,6 +48,7 @@ class AppState:
         self.current_demo_id: str = "none"
         self.realtime_pose: Optional[Tuple[np.ndarray, np.ndarray]] = None  # (R_cam_to_world, t_cam_to_world)
         self.realtime_display_frame: Optional[np.ndarray] = None  # BGR frame to show in central view (realtime pose demo)
+        self.latest_camera_frame: Optional[np.ndarray] = None  # latest BGR frame for gallery capture
 
     def refresh_gallery_paths(self) -> List[Path]:
         """Scan gallery folder for images; update self.image_paths; return list."""

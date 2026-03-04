@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QGroupBox, QButtonGroup, QPushButton
 from ..registry import register_demo, get_demos
 from .none_demo import NoneDemo
 from .realtime_pose import RealtimePoseDemo
+from .rotate_image import RotateImageDemo
 
 
 def build_demos_button_group(parent) -> tuple[QGroupBox, QButtonGroup, dict[str, QPushButton]]:
@@ -35,11 +36,13 @@ def register_builtin_demos() -> None:
     """Register None and Realtime pose demos."""
     register_demo(NoneDemo())
     register_demo(RealtimePoseDemo())
+    register_demo(RotateImageDemo())
 
 
 __all__ = [
     "NoneDemo",
     "RealtimePoseDemo",
+    "RotateImageDemo",
     "build_demos_button_group",
     "register_builtin_demos",
 ]

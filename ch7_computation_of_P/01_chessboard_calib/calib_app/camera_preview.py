@@ -6,7 +6,7 @@ Single responsibility: camera enumeration (QCameraInfo), capture, and preview wi
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -59,13 +59,8 @@ class CameraPreviewWidget(QWidget):
 
     frame_available = pyqtSignal(object)  # BGR frame (numpy array) when preview is running
 
-    def __init__(
-        self,
-        on_capture: Optional[Callable[[np.ndarray], None]] = None,
-        parent=None,
-    ):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._on_capture = on_capture
         self._cap: Optional[cv2.VideoCapture] = None
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_timer)
@@ -104,11 +99,7 @@ class CameraPreviewWidget(QWidget):
         btn_row.addWidget(self._res_combo)
         self._start_btn = QPushButton("Start preview")
         self._start_btn.clicked.connect(self._toggle_preview)
-        self._capture_btn = QPushButton("Take photo")
-        self._capture_btn.clicked.connect(self._capture)
-        self._capture_btn.setEnabled(False)
         btn_row.addWidget(self._start_btn)
-        btn_row.addWidget(self._capture_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -249,7 +240,6 @@ class CameraPreviewWidget(QWidget):
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
         self._timer.start(30)
         self._start_btn.setText("Stop preview")
-        self._capture_btn.setEnabled(True)
 
     def _stop_preview(self) -> None:
         self._timer.stop()
@@ -257,7 +247,6 @@ class CameraPreviewWidget(QWidget):
             self._cap.release()
             self._cap = None
         self._start_btn.setText("Start preview")
-        self._capture_btn.setEnabled(False)
         self._preview_label.setText("Preview off")
         self._preview_label.setPixmap(QPixmap())
 
@@ -269,13 +258,6 @@ class CameraPreviewWidget(QWidget):
             return
         self.frame_available.emit(frame)
         # Display is updated by the main window via set_frame_to_show (raw or processed)
-
-    def _capture(self) -> None:
-        if self._cap is None or not self._cap.isOpened():
-            return
-        ret, frame = self._cap.read()
-        if ret and self._on_capture is not None:
-            self._on_capture(frame.copy())
 
     def closeEvent(self, event) -> None:
         self._stop_preview()

@@ -1,7 +1,7 @@
 """
-Gallery: thumbnail grid of images in a fixed folder, load at startup, remove, click to view.
+Gallery: reusable dockable thumbnail grid for a folder; optional capture button.
 
-Single responsibility: display and manage calibration image gallery.
+Single responsibility: display and manage a folder-based image gallery.
 """
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QSizePolicy,
-    QMessageBox,
 )
 
 
@@ -108,18 +107,22 @@ class ThumbnailTile(QFrame):
 
 
 class GalleryWidget(QWidget):
-    """Gallery of thumbnails; load at startup, remove items, click to view."""
+    """Reusable gallery: thumbnails for a folder, optional capture button. Click thumbnail to open in center."""
 
     image_selected = pyqtSignal(Path)
 
     def __init__(
         self,
         folder: Path,
+        title: str = "Gallery",
+        on_capture_requested: Optional[Callable[[Path], None]] = None,
         parent=None,
     ):
         super().__init__(parent)
         self._folder = Path(folder)
         self._folder.mkdir(parents=True, exist_ok=True)
+        self._title = title
+        self._on_capture_requested = on_capture_requested
         self._tiles: List[ThumbnailTile] = []
         self._init_ui()
         self.reload()
@@ -128,10 +131,14 @@ class GalleryWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         header = QHBoxLayout()
-        header.addWidget(QLabel("Gallery"))
+        header.addWidget(QLabel(self._title))
         reload_btn = QPushButton("Reload")
         reload_btn.clicked.connect(self.reload)
         header.addWidget(reload_btn)
+        if self._on_capture_requested is not None:
+            capture_btn = QPushButton("Capture")
+            capture_btn.clicked.connect(self._request_capture)
+            header.addWidget(capture_btn)
         open_folder_btn = QPushButton("Open folder")
         open_folder_btn.clicked.connect(self._open_folder)
         header.addWidget(open_folder_btn)
@@ -145,6 +152,11 @@ class GalleryWidget(QWidget):
         self._grid_layout = QGridLayout(self._grid_widget)
         self._scroll.setWidget(self._grid_widget)
         layout.addWidget(self._scroll)
+
+    def _request_capture(self) -> None:
+        """Ask main window to save current camera frame to this gallery's folder."""
+        if self._on_capture_requested is not None:
+            self._on_capture_requested(self._folder)
 
     def _open_folder(self) -> None:
         """Open the gallery folder in the system file manager."""
