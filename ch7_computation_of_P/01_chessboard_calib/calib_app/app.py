@@ -11,7 +11,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QSettings, QEvent, QObject
+from PyQt5.QtCore import Qt, QSettings, QEvent, QObject, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QLabel,
     QDockWidget,
+    QPushButton,
     QScrollArea,
     QFrame,
     QStackedWidget,
@@ -32,14 +33,14 @@ from PyQt5.QtWidgets import (
 
 from .state import AppState
 from .logging_ui import set_log_sink
-from .widgets import LogOutputWidget
+from .widgets import LogOutputWidget, ImageViewWidget
 from .camera_preview import CameraPreviewWidget
 from .gallery import GalleryWidget
 from .calibration import CalibrationWidget
 from .plot3d import Calib3DPlot
 from .calibration_result_view import CalibrationResultImagesWidget
 from . import logging_ui
-from .plugins.registry import get_demo_by_id
+from .plugins.registry import get_demo_by_id, get_demos
 from .plugins.demos import register_builtin_demos, build_demos_button_group
 
 SETTINGS_ORG = "hartley-learning"
@@ -96,22 +97,17 @@ def _next_capture_path(folder: Path) -> Path:
 
 
 class ImageDocumentWidget(QWidget):
-    """Single-document image view; path and optional homography for rotate demo."""
+    """Single-document image view; path and optional homography for rotate demo. Uses ImageViewWidget."""
 
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
         self._path = path
         self._img_bgr = None
-        self._H = None
         self._load_image()
         layout = QVBoxLayout(self)
-        self._label = QLabel()
-        self._label.setAlignment(Qt.AlignCenter)
-        self._label.setMinimumSize(400, 300)
-        self._label.setStyleSheet("background-color: #f0f0f0; color: #444;")
-        self._label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout.addWidget(self._label)
-        self._update_display()
+        self._view = ImageViewWidget(self)
+        self._view.set_image(self._img_bgr, placeholder="Failed to load image")
+        layout.addWidget(self._view)
 
     def _load_image(self) -> None:
         img = cv2.imread(str(self._path))
@@ -125,57 +121,21 @@ class ImageDocumentWidget(QWidget):
 
     def set_homography(self, H: np.ndarray | None) -> None:
         """Set 3x3 homography for display (e.g. from rotate demo). None = show original."""
-        self._H = H
-        self._update_display()
-
-    def _update_display(self) -> None:
-        if self._img_bgr is None:
-            self._label.setText("Failed to load image")
-            self._label.setPixmap(QPixmap())
-            return
-        img = self._img_bgr
-        if self._H is not None:
-            h, w = img.shape[:2]
-            img = cv2.warpPerspective(img, self._H, (w, h))
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        h, w = img_rgb.shape[:2]
-        self._img_wh = (w, h)
-        lw, lh = self._label.width(), self._label.height()
-        if lw > 0 and lh > 0:
-            scale = min(lw / w, lh / h, 1.0)
-            if scale < 1.0:
-                nw, nh = int(w * scale), int(h * scale)
-                if nw < 1: nw = 1
-                if nh < 1: nh = 1
-                img_rgb = cv2.resize(img_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
-                h, w = nh, nw
-        self._pixmap_wh = (w, h)
-        bytes_per_line = 3 * w
-        qimg = QImage(img_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        self._label.setPixmap(QPixmap.fromImage(qimg.copy()))
-        self._label.setText("")
+        self._view.set_homography(H)
 
     def map_to_image_coords(self, wx: float, wy: float) -> tuple[float, float] | None:
         """Map widget coords to image pixel (x, y); None if outside image."""
-        if not hasattr(self, "_img_wh") or not hasattr(self, "_pixmap_wh"):
-            return None
-        iw, ih = self._img_wh
-        nw, nh = self._pixmap_wh
-        ww, wh = self.width(), self.height()
-        left = (ww - nw) / 2
-        top = (wh - nh) / 2
-        px, py = wx - left, wy - top
-        if 0 <= px < nw and 0 <= py < nh:
-            return (px * iw / nw, py * ih / nh)
-        return None
+        return self._view.map_to_image_coords(wx, wy)
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._update_display()
+    def image_view(self) -> ImageViewWidget:
+        """Reusable image view (for connecting hover_image_coords, etc.)."""
+        return self._view
 
 
 class CentralTabbedView(QWidget):
     """Tabbed image documents; closable tabs; open by path or switch to existing tab."""
+
+    image_coords_changed = pyqtSignal(object)  # tuple[float, float] | None
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -184,13 +144,32 @@ class CentralTabbedView(QWidget):
         self._tab_widget = QTabWidget()
         self._tab_widget.setTabsClosable(True)
         self._tab_widget.tabCloseRequested.connect(self._close_tab)
+        self._tab_widget.currentChanged.connect(self._on_current_tab_changed)
         self._path_to_index: dict = {}
+        self._current_coords_signal = None
         layout.addWidget(self._tab_widget)
         self._placeholder = QLabel("Open an image from a gallery (click a thumbnail)")
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setStyleSheet("background-color: #f0f0f0; color: #666;")
         self._placeholder.setMinimumSize(400, 300)
         self._show_placeholder()
+
+    def _on_current_tab_changed(self, index: int) -> None:
+        if self._current_coords_signal is not None:
+            try:
+                self._current_coords_signal.disconnect(self._forward_image_coords)
+            except TypeError:
+                pass
+            self._current_coords_signal = None
+        doc = self.current_document()
+        if doc is not None:
+            self._current_coords_signal = doc.image_view().hover_image_coords
+            self._current_coords_signal.connect(self._forward_image_coords)
+        else:
+            self.image_coords_changed.emit(None)
+
+    def _forward_image_coords(self, pt: tuple[float, float] | None) -> None:
+        self.image_coords_changed.emit(pt)
 
     def _show_placeholder(self) -> None:
         if self._tab_widget.count() == 0:
@@ -314,11 +293,22 @@ class MainWindow(QMainWindow):
         dock_3d.setWidget(self._plot3d)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock_3d)
 
-        # Dock: Demos
+        # Dock: Demos (buttons + demo-specific pane)
         demos_group, self._demos_button_group, self._demos_buttons = build_demos_button_group(self)
+        self._demo_ids_order = [d.id() for d in get_demos()]
+        self._demo_pane_stack = QStackedWidget()
+        for demo_id in self._demo_ids_order:
+            demo = get_demo_by_id(demo_id)
+            pane = demo.get_pane_widget(self._get_demo_context()) if demo else None
+            self._demo_pane_stack.addWidget(pane if pane is not None else QWidget())
+        demos_container = QWidget()
+        demos_layout = QVBoxLayout(demos_container)
+        demos_layout.addWidget(demos_group)
+        demos_layout.addWidget(QLabel("Options:"))
+        demos_layout.addWidget(self._demo_pane_stack)
         dock_demos = QDockWidget("Demos", self)
         dock_demos.setObjectName("Demos")
-        dock_demos.setWidget(demos_group)
+        dock_demos.setWidget(demos_container)
         self.addDockWidget(Qt.RightDockWidgetArea, dock_demos)
         for demo_id, btn in self._demos_buttons.items():
             btn.clicked.connect(lambda checked, did=demo_id: self._on_demo_clicked(did))
@@ -355,6 +345,9 @@ class MainWindow(QMainWindow):
         menu_bar = QMenuBar(self)
         menu_bar.addMenu(view_menu)
         self.setMenuBar(menu_bar)
+
+        self._status_bar = self.statusBar()
+        self._status_bar.showMessage("")
 
         self._rotate_event_filter = _RotateDemoEventFilter(self)
         logging_ui.log("Calibration app started. Add images and run Calibrate from gallery.")
@@ -463,6 +456,20 @@ class MainWindow(QMainWindow):
         self._calib_widget.calibration_done.connect(self._on_calibration_done)
         self._camera_preview.frame_available.connect(self._on_preview_frame)
         self._camera_preview.preview_running_changed.connect(self._on_preview_running_changed)
+        self._tabbed_view.image_coords_changed.connect(self._on_image_coords_changed)
+
+    def _on_image_coords_changed(self, pt: tuple[float, float] | None) -> None:
+        if pt is not None:
+            self._status_bar.showMessage(f"Image: ({pt[0]:.1f}, {pt[1]:.1f})")
+        else:
+            self._status_bar.showMessage("Image: —")
+
+    def _request_rotate_reset(self) -> None:
+        """Reset rotation for the rotate-image demo (from pane button)."""
+        demo = get_demo_by_id("rotate_image")
+        doc = self._tabbed_view.current_document()
+        if demo is not None and hasattr(demo, "reset_rotation") and doc is not None:
+            demo.reset_rotation(doc)
 
     def _get_demo_context(self) -> dict:
         return {
@@ -472,6 +479,7 @@ class MainWindow(QMainWindow):
             "get_work_folder": lambda: self._images_base / "work",
             "get_K": lambda: self._state.calibration.K if self._state.calibration is not None else None,
             "switch_demo": self._switch_demo,
+            "request_rotate_reset": self._request_rotate_reset,
         }
 
     def _switch_demo(self, demo_id: str) -> None:
@@ -494,6 +502,10 @@ class MainWindow(QMainWindow):
             self._tabbed_view.removeEventFilter(self._rotate_event_filter)
         self._state.current_demo_id = demo_id
         self._state.realtime_pose = None
+        try:
+            self._demo_pane_stack.setCurrentIndex(self._demo_ids_order.index(demo_id))
+        except ValueError:
+            pass
         current = get_demo_by_id(demo_id)
         if current is not None:
             current.on_activated(self._get_demo_context())

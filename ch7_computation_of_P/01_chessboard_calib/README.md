@@ -109,3 +109,7 @@ this make the point under the mouse always be the same point. so the mouse move 
 use the K load from saved. is K is not available, warn the user and return to last demo or none demo
 
 
+# demo refactor
+add a dockable widget to container the pane of specific demo
+The "Rotate image" should have a button to reset the rotation of the image (so no rotation, show the original image)
+

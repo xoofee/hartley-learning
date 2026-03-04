@@ -4,9 +4,12 @@ Exclusive demos (only one active at a time).
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from PyQt5.QtWidgets import QWidget
 
 _DEMOS: list["Demo"] = []
 _DEMOS_BY_ID: dict[str, "Demo"] = {}
@@ -41,6 +44,10 @@ class Demo:
     def on_frame(self, frame_bgr: np.ndarray, context: dict) -> None:
         """Called when a new camera frame is available (preview on). Demo may set context['state'].realtime_pose."""
         pass
+
+    def get_pane_widget(self, context: dict) -> "QWidget | None":
+        """Optional: widget shown in the demo pane when this demo is active. None = empty pane."""
+        return None
 
 
 def register_demo(demo: Demo) -> None:
