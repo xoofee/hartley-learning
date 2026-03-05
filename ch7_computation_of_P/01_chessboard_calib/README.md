@@ -32,6 +32,7 @@ get R,t of each camera
 output reproj error to log
 
 6 3d plot
+
 - show a 3d plot of the chessboard and camera pose. camera is shown in a paramid as in ch6_camera_model\camera_model
 
 since in real image calibration, we do not know the sensor size, so the K only reflect the focal length to pixel size ratio
@@ -66,6 +67,7 @@ Photos are stored in `01_chessboard_calib/calib_images/`. Use **Camera preview**
 # Applications
 
 ## realtime camera pose
+
 now add this demos
 make it plugin pattern like ch6_camera_model\camera_model\plugins
 so that it is extensible and scalable and modular
@@ -79,6 +81,7 @@ when camera preview is on
 detect the camera pose using the calibrated K and the realtime chessboard image
 
 # gallery refactor
+
 rename the current gallery to a reusable dockable gallery 
 and add a capture button to capture image photos to this calibration gallery and the folder
 
@@ -92,7 +95,6 @@ which bind to  ch7_computation_of_P\01_chessboard_calib\images\work
 remove the original take phone button
 because we already have a work gallery that could take photos
 
-
 # demo "rotate image"
 
 then add a demo to rotate image. When the "camera rotate" is on, and any image from the work opened in the centerwidget
@@ -105,24 +107,31 @@ the current mouse position and the start position could determine the R (with K)
 
 this make the point under the mouse always be the same point. so the mouse move is in opposite of camera actual move
 
-
 use the K load from saved. is K is not available, warn the user and return to last demo or none demo
 
-
 # demo refactor
-add a dockable widget to container the pane of specific demo
+
+add a dockable widget to container the pane of specific demo  
 The "Rotate image" should have a button to reset the rotation of the image (so no rotation, show the original image)
 
-
-
 # Tools
+
 Add a Tools menu
 add a submenu to switch on/off of the image x y in status bar
 format as integer when display in the status bar
 
 ## yaw pitch
+
 show the realtime pitch yaw in degrees in status bar (keep one decimal place) for the active ImageViewWidget if K matrix is avaiable
 the yaw pitch if converted from x,y in image 2d coordinate (above) and K
 add a submenu in Tools to switch this feature on/off
 This feature does not depended on the "camera rotate" demo, but could make some function reusable to reduce duplication
+
+# rotate image demo improve
+
+let use manual adjust the yaw pitch of camera by spin (the image should rotate reactively)
+the spin step should be 1 degree
+the spin widget is inside the panel of this demo, under the reset button of "rotate image" demo
+
+when user drag mouse on the image, update the camera yaw pitch of the spin dynamically
 

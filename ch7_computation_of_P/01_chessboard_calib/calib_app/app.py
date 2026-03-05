@@ -42,6 +42,7 @@ from .calibration_result_view import CalibrationResultImagesWidget
 from . import logging_ui
 from .plugins.registry import get_demo_by_id, get_demos
 from .plugins.demos import register_builtin_demos, build_demos_button_group
+from .view_angles import image_coords_to_yaw_pitch_deg
 
 SETTINGS_ORG = "hartley-learning"
 SETTINGS_APP = "chessboard_calib"
@@ -342,8 +343,25 @@ class MainWindow(QMainWindow):
             dock.visibilityChanged.connect(lambda visible, a=action: a.setChecked(visible))
             view_menu.addAction(action)
             self._dock_visibility_actions[name] = action
+        # Tools menu: status bar toggles
+        self._show_image_coords = True
+        self._show_yaw_pitch = False
+        self._last_image_coords: tuple[float, float] | None = None
+        tools_menu = QMenu("&Tools", self)
+        self._action_show_image_coords = QAction("Show image coords (x, y)", self)
+        self._action_show_image_coords.setCheckable(True)
+        self._action_show_image_coords.setChecked(True)
+        self._action_show_image_coords.triggered.connect(self._on_toggle_show_image_coords)
+        tools_menu.addAction(self._action_show_image_coords)
+        self._action_show_yaw_pitch = QAction("Show yaw / pitch (degrees)", self)
+        self._action_show_yaw_pitch.setCheckable(True)
+        self._action_show_yaw_pitch.setChecked(False)
+        self._action_show_yaw_pitch.triggered.connect(self._on_toggle_show_yaw_pitch)
+        tools_menu.addAction(self._action_show_yaw_pitch)
+
         menu_bar = QMenuBar(self)
         menu_bar.addMenu(view_menu)
+        menu_bar.addMenu(tools_menu)
         self.setMenuBar(menu_bar)
 
         self._status_bar = self.statusBar()
@@ -400,6 +418,11 @@ class MainWindow(QMainWindow):
         # Load persisted K and dist (minimal calibration for realtime pose / 3D)
         self._load_persisted_calibration(settings)
         self._calib_widget.refresh_calibration_display()
+        # Tools: status bar toggles
+        self._show_image_coords = bool(settings.value("tools_show_image_coords", True))
+        self._show_yaw_pitch = bool(settings.value("tools_show_yaw_pitch", False))
+        self._action_show_image_coords.setChecked(self._show_image_coords)
+        self._action_show_yaw_pitch.setChecked(self._show_yaw_pitch)
 
     def _load_persisted_calibration(self, settings: QSettings) -> None:
         """Restore K and dist from settings into state.calibration if present."""
@@ -445,6 +468,8 @@ class MainWindow(QMainWindow):
         if self._state.calibration is not None:
             settings.setValue("calib_K", self._state.calibration.K.ravel().tolist())
             settings.setValue("calib_dist", self._state.calibration.dist.ravel().tolist())
+        settings.setValue("tools_show_image_coords", self._show_image_coords)
+        settings.setValue("tools_show_yaw_pitch", self._show_yaw_pitch)
 
     def closeEvent(self, event) -> None:
         self._save_settings()
@@ -459,10 +484,38 @@ class MainWindow(QMainWindow):
         self._tabbed_view.image_coords_changed.connect(self._on_image_coords_changed)
 
     def _on_image_coords_changed(self, pt: tuple[float, float] | None) -> None:
-        if pt is not None:
-            self._status_bar.showMessage(f"Image: ({pt[0]:.1f}, {pt[1]:.1f})")
-        else:
-            self._status_bar.showMessage("Image: —")
+        self._last_image_coords = pt
+        self._refresh_status_bar()
+
+    def _refresh_status_bar(self) -> None:
+        parts = []
+        if self._show_image_coords:
+            if self._last_image_coords is not None:
+                x, y = self._last_image_coords
+                parts.append(f"Image: ({int(x)}, {int(y)})")
+            else:
+                parts.append("Image: —")
+        if self._show_yaw_pitch:
+            K = self._state.calibration.K if self._state.calibration is not None else None
+            if K is not None and self._last_image_coords is not None:
+                try:
+                    yaw_deg, pitch_deg = image_coords_to_yaw_pitch_deg(
+                        self._last_image_coords[0], self._last_image_coords[1], K
+                    )
+                    parts.append(f"Yaw: {yaw_deg:.1f}° Pitch: {pitch_deg:.1f}°")
+                except Exception:
+                    parts.append("Yaw: — Pitch: —")
+            else:
+                parts.append("Yaw: — Pitch: —")
+        self._status_bar.showMessage("  |  ".join(parts) if parts else "")
+
+    def _on_toggle_show_image_coords(self, checked: bool) -> None:
+        self._show_image_coords = checked
+        self._refresh_status_bar()
+
+    def _on_toggle_show_yaw_pitch(self, checked: bool) -> None:
+        self._show_yaw_pitch = checked
+        self._refresh_status_bar()
 
     def _request_rotate_reset(self) -> None:
         """Reset rotation for the rotate-image demo (from pane button)."""
