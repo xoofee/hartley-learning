@@ -113,3 +113,16 @@ use the K load from saved. is K is not available, warn the user and return to la
 add a dockable widget to container the pane of specific demo
 The "Rotate image" should have a button to reset the rotation of the image (so no rotation, show the original image)
 
+
+
+# Tools
+Add a Tools menu
+add a submenu to switch on/off of the image x y in status bar
+format as integer when display in the status bar
+
+## yaw pitch
+show the realtime pitch yaw in degrees in status bar (keep one decimal place) for the active ImageViewWidget if K matrix is avaiable
+the yaw pitch if converted from x,y in image 2d coordinate (above) and K
+add a submenu in Tools to switch this feature on/off
+This feature does not depended on the "camera rotate" demo, but could make some function reusable to reduce duplication
+
