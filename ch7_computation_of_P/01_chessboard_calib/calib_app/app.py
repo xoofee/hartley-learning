@@ -86,6 +86,16 @@ class _RotateDemoEventFilter(QObject):
         return False
 
 
+def _settings_bool(settings: QSettings, key: str, default: bool) -> bool:
+    """Read a boolean from QSettings; handles string values from some backends."""
+    v = settings.value(key, default)
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    return str(v).lower() not in ("0", "false", "no", "")
+
+
 def _next_capture_path(folder: Path) -> Path:
     """Return next available path {folder.name}_0001.jpg, ..."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -418,11 +428,12 @@ class MainWindow(QMainWindow):
         # Load persisted K and dist (minimal calibration for realtime pose / 3D)
         self._load_persisted_calibration(settings)
         self._calib_widget.refresh_calibration_display()
-        # Tools: status bar toggles
-        self._show_image_coords = bool(settings.value("tools_show_image_coords", True))
-        self._show_yaw_pitch = bool(settings.value("tools_show_yaw_pitch", False))
+        # Tools: status bar toggles (persistent)
+        self._show_image_coords = _settings_bool(settings, "tools_show_image_coords", True)
+        self._show_yaw_pitch = _settings_bool(settings, "tools_show_yaw_pitch", False)
         self._action_show_image_coords.setChecked(self._show_image_coords)
         self._action_show_yaw_pitch.setChecked(self._show_yaw_pitch)
+        self._refresh_status_bar()
 
     def _load_persisted_calibration(self, settings: QSettings) -> None:
         """Restore K and dist from settings into state.calibration if present."""

@@ -4,7 +4,7 @@ Uses saved K; point under mouse stays fixed. Requires K and image from work gall
 
 BUG:
 
-the accumulated rotation is not correct!
+The point under the mouse is not strictly fixed.
 
 """
 from __future__ import annotations
@@ -208,41 +208,43 @@ class RotateImageDemo(Demo):
             self._start_d0 = d0 / (np.linalg.norm(d0) + 1e-10)
             self._current_document = document
             return True
+        
+        # now move or release
+
+        if (self._start_d0 is None) or (self._current_document is not document):
+            return False    # not in dragging state
+
+        # now in dragging state
+
+        if event_type != "release" and event_type != "move":
+            return False    # only process release and move events
+
+        d0 = self._start_d0
+        d = self._K_inv @ np.array([ix, iy, 1.0], dtype=np.float64)
+        d = d / (np.linalg.norm(d) + 1e-10)
+
+        R_delta = _rotation_from_d1_to_d2(d0, d)  # R @ d0 = d: point follows cursor
+        view_dir = R_delta.T @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        yaw_d, pitch_d = direction_to_yaw_pitch(view_dir)
+
+        yaw_total, pitch_total = yaw_d + self._yaw_acc, pitch_d + self._pitch_acc
+
+        R = R_from_yaw_pitch(yaw_total, pitch_total)
+
+        # log(f'R_ccc: {R_acc}')
+        # log(f'R_delta: {R_delta}')
+        # log(f' d0: {d0} , d: {d}')
+        # log(f' view_dir: {view_dir}')
+        # log(f"yaw_d: {np.degrees(yaw_d):.1f}, pitch_d: {np.degrees(pitch_d):.1f}")
+
+        H = self._K @ R.T @ self._K_inv
+        document.set_homography(H)
+        self._update_pane_spins(yaw_total, pitch_total)
+
         if event_type == "release":
-            if self._start_d0 is not None and self._current_document is document:
-                d = self._K_inv @ np.array([ix, iy, 1.0], dtype=np.float64)
-                d = d / (np.linalg.norm(d) + 1e-10)
-                R_acc = R_from_yaw_pitch(self._yaw_acc, self._pitch_acc)
-                R_delta = _rotation_from_d1_to_d2(self._start_d0, d)  # R @ d0 = d: point follows cursor (camera right => image left)
-                R_total = R_delta @ R_acc
-                view_dir = R_total.T @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
-                self._yaw_acc, self._pitch_acc = direction_to_yaw_pitch(view_dir)
-                R = R_from_yaw_pitch(self._yaw_acc, self._pitch_acc)
-                H = self._K @ R.T @ self._K_inv
-                document.set_homography(H)
-                self._update_pane_spins()
             self._start_xy = None
             self._start_d0 = None
-            return True
-        if event_type == "move" and self._start_d0 is not None:
-            d0 = self._start_d0
-            d = self._K_inv @ np.array([ix, iy, 1.0], dtype=np.float64)
-            d = d / (np.linalg.norm(d) + 1e-10)
-            R_acc = R_from_yaw_pitch(self._yaw_acc, self._pitch_acc)
-            R_delta = _rotation_from_d1_to_d2(d0, d)  # R @ d0 = d: point follows cursor
-            R_total = R_delta @ R_acc
-            view_dir = R_total.T @ np.array([0.0, 0.0, 1.0], dtype=np.float64)
-            yaw_d, pitch_d = direction_to_yaw_pitch(view_dir)
+            self._yaw_acc = yaw_total
+            self._pitch_acc = pitch_total
 
-            log(f'R_ccc: {R_acc}')
-            log(f'R_delta: {R_delta}')
-            log(f' d0: {d0} , d: {d}')
-            log(f' view_dir: {view_dir}')
-            log(f"yaw_d: {np.degrees(yaw_d):.1f}, pitch_d: {np.degrees(pitch_d):.1f}")
-
-            R = R_from_yaw_pitch(yaw_d, pitch_d)
-            H = self._K @ R.T @ self._K_inv
-            document.set_homography(H)
-            self._update_pane_spins(yaw_d, pitch_d)
-            return True
-        return False
+        return True    # event was handled
