@@ -156,6 +156,7 @@ class CentralTabbedView(QWidget):
         self._tab_widget.setTabsClosable(True)
         self._tab_widget.tabCloseRequested.connect(self._close_tab)
         self._tab_widget.currentChanged.connect(self._on_current_tab_changed)
+        self._tab_widget.tabBar().installEventFilter(self)
         self._path_to_index: dict = {}
         self._current_coords_signal = None
         layout.addWidget(self._tab_widget)
@@ -164,6 +165,17 @@ class CentralTabbedView(QWidget):
         self._placeholder.setStyleSheet("background-color: #f0f0f0; color: #666;")
         self._placeholder.setMinimumSize(400, 300)
         self._show_placeholder()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj == self._tab_widget.tabBar() and event.type() == QEvent.MouseButtonPress:
+            if event.button() == Qt.MiddleButton:
+                idx = self._tab_widget.tabBar().tabAt(event.pos())
+                if 0 <= idx < self._tab_widget.count():
+                    w = self._tab_widget.widget(idx)
+                    if w is not self._placeholder:
+                        self._close_tab(idx)
+                        return True
+        return super().eventFilter(obj, event)
 
     def _on_current_tab_changed(self, index: int) -> None:
         if self._current_coords_signal is not None:

@@ -135,3 +135,11 @@ the spin widget is inside the panel of this demo, under the reset button of "rot
 
 when user drag mouse on the image, update the camera yaw pitch of the spin dynamically
 
+# add a panoramic mosaic demo
+1 get images that is opened in the centerwidget
+2 sort the images using file names
+3 use the middle image as reference
+4 find H between consecutive images
+5 show them in a single image. 
+no image fusion/渐变 is required, just simple imprint is ok. we want to show that the H is right, not the fusion is visually good
+
