@@ -3,7 +3,10 @@ Plugin/feature registry: add new demos without changing core GUI.
 """
 from __future__ import annotations
 
-from typing import Callable, Any
+from typing import Callable, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PyQt5.QtWidgets import QWidget
 
 _FEATURES: dict[str, "Feature"] = {}
 
@@ -105,6 +108,10 @@ class Demo:
     def on_image_button_release(self, event, context: dict) -> None:
         """Mouse release on image plot."""
         pass
+
+    def get_pane_widget(self, context: dict) -> "Optional[QWidget]":
+        """Optional: widget shown in the demo pane when this demo is active. None = empty pane."""
+        return None
 
 
 def register_demo(demo: Demo) -> None:

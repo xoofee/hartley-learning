@@ -22,6 +22,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QScrollArea,
     QSplitter,
+    QStackedWidget,
+    QLabel,
 )
 from PyQt5.QtCore import Qt
 
@@ -41,7 +43,7 @@ from .widgets import (
     LogOutputWidget,
     ConsoleWidget,
 )
-from .plugins.registry import get_demo_by_id
+from .plugins.registry import get_demo_by_id, get_demos
 from .plugins.demos import register_builtin_demos, build_demos_button_group
 
 # Register built-in demos (exclusive: None, P row planes, Backproject, Angulometer).
@@ -153,9 +155,17 @@ class MainWindow(QMainWindow):
         pose_row.setLayout(pose_row_layout)
         right_layout.addWidget(pose_row)
 
-        # Demos area: exclusive buttons (only one demo active at a time)
+        # Demos area: exclusive buttons + demo-specific pane (like ch7 calib_app)
         demos_group, self._demos_button_group, self._demos_buttons = build_demos_button_group(self)
         right_layout.addWidget(demos_group)
+        self._demo_ids_order = [d.id() for d in get_demos()]
+        self._demo_pane_stack = QStackedWidget()
+        for demo_id in self._demo_ids_order:
+            demo = get_demo_by_id(demo_id)
+            pane = demo.get_pane_widget(self._get_context()) if demo else None
+            self._demo_pane_stack.addWidget(pane if pane is not None else QWidget())
+        right_layout.addWidget(QLabel("Options:"))
+        right_layout.addWidget(self._demo_pane_stack)
         for demo_id, btn in self._demos_buttons.items():
             btn.clicked.connect(lambda checked, did=demo_id: self._on_demo_clicked(did))
 
@@ -181,6 +191,7 @@ class MainWindow(QMainWindow):
             "square_pts": self.square_pts,
             "triangle_pts": self.triangle_pts,
             "rectangle_pts": self.rectangle_pts,
+            "request_redraw": self._draw_all,
         }
 
     def _get_console_namespace(self) -> dict:
@@ -216,6 +227,10 @@ class MainWindow(QMainWindow):
         if prev is not None:
             prev.on_deactivated()
         self._current_demo_id = demo_id
+        try:
+            self._demo_pane_stack.setCurrentIndex(self._demo_ids_order.index(demo_id))
+        except ValueError:
+            pass
         current = get_demo_by_id(demo_id)
         if current is not None:
             current.on_activated(self._get_context())
