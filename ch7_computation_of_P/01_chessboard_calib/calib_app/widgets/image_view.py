@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtGui import QImage, QPixmap, QPainter
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy, QPushButton
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QPushButton
 
 
 class _PaintArea(QWidget):
@@ -149,8 +149,9 @@ class ImageViewWidget(QWidget):
         layout.addWidget(self._paint_area)
         self._fit_btn = QPushButton("Fit")
         self._fit_btn.setToolTip("Reset zoom and pan to fit image")
+        self._fit_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self._fit_btn.clicked.connect(self._on_fit)
-        layout.addWidget(self._fit_btn)
+        layout.addWidget(self._fit_btn, 0, Qt.AlignLeft)
 
     def _on_fit(self) -> None:
         self._zoom_scale = 1.0

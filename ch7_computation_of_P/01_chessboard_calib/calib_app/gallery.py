@@ -28,6 +28,8 @@ from PyQt5.QtWidgets import (
 
 
 THUMB_SIZE = 120
+# Extra horizontal space per tile (margins + spacing) for column count
+THUMB_CELL_WIDTH = THUMB_SIZE + 16
 
 
 def open_folder_in_explorer(path: Path) -> None:
@@ -152,6 +154,7 @@ class GalleryWidget(QWidget):
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._grid_widget = QWidget()
         self._grid_layout = QGridLayout(self._grid_widget)
+        self._grid_layout.setSpacing(4)
         self._scroll.setWidget(self._grid_widget)
         layout.addWidget(self._scroll)
 
@@ -174,6 +177,25 @@ class GalleryWidget(QWidget):
             t.deleteLater()
         self._tiles = []
 
+    def _cols_from_width(self, width: int) -> int:
+        """Number of columns that fit in the given width (Explorer-like auto-fit)."""
+        if width <= 0:
+            return 1
+        return max(1, width // THUMB_CELL_WIDTH)
+
+    def _relayout(self) -> None:
+        """Re-arrange tiles in the grid to fit current viewport width."""
+        viewport_width = self._scroll.viewport().width()
+        cols = self._cols_from_width(viewport_width)
+        for i, tile in enumerate(self._tiles):
+            self._grid_layout.removeWidget(tile)
+            row, col = i // cols, i % cols
+            self._grid_layout.addWidget(tile, row, col)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._relayout()
+
     def reload(self) -> None:
         """Scan folder and rebuild thumbnail grid."""
         self._clear_tiles()
@@ -182,13 +204,11 @@ class GalleryWidget(QWidget):
             p for p in self._folder.iterdir()
             if p.is_file() and p.suffix.lower() in exts
         )
-        cols = 4
-        for i, path in enumerate(paths):
-            row, col = i // cols, i % cols
+        for path in paths:
             tile = ThumbnailTile(path, on_remove=self._remove_image)
             tile.clicked.connect(self.image_selected.emit)
-            self._grid_layout.addWidget(tile, row, col)
             self._tiles.append(tile)
+        self._relayout()
 
     def _remove_image(self, path: Path) -> None:
         try:
