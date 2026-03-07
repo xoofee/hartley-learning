@@ -239,6 +239,21 @@ class CentralTabbedView(QWidget):
         doc = self.current_document()
         return doc.path() if doc is not None else None
 
+    def get_open_documents_sorted(self) -> list[tuple[Path, np.ndarray]]:
+        """Return (path, image_bgr) for each open tab, sorted by path name. Skips placeholder and failed loads."""
+        out: list[tuple[Path, np.ndarray]] = []
+        for i in range(self._tab_widget.count()):
+            w = self._tab_widget.widget(i)
+            if w is self._placeholder or not isinstance(w, ImageDocumentWidget):
+                continue
+            path = w.path()
+            img = w.image_bgr()
+            if img is None or img.size == 0:
+                continue
+            out.append((path, img))
+        out.sort(key=lambda x: x[0].name)
+        return out
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -566,6 +581,8 @@ class MainWindow(QMainWindow):
             "get_current_document": lambda: self._tabbed_view.current_document(),
             "get_current_path": lambda: self._tabbed_view.current_path(),
             "get_work_folder": lambda: self._images_base / "work",
+            "get_open_documents_sorted": lambda: self._tabbed_view.get_open_documents_sorted(),
+            "open_path": self._tabbed_view.open_path,
             "get_K": lambda: self._state.calibration.K if self._state.calibration is not None else None,
             "switch_demo": self._switch_demo,
             "request_rotate_reset": self._request_rotate_reset,
