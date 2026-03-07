@@ -44,6 +44,7 @@ class AppState:
         self.image_paths: List[Path] = []
         self.chessboard = ChessboardParams()
         self.calibration: CalibrationResult | None = None
+        self.calibration_is_fake: bool = False  # if True, do not persist K/dist
         self.selected_image_path: Path | None = None  # for main view
         self.current_demo_id: str = "none"
         self.realtime_pose: Optional[Tuple[np.ndarray, np.ndarray]] = None  # (R_cam_to_world, t_cam_to_world)

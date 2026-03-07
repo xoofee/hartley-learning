@@ -291,6 +291,7 @@ class MainWindow(QMainWindow):
         self._calib_widget = CalibrationWidget(
             self._state,
             get_gallery_paths=lambda: self._gallery_calib.get_paths(),
+            get_current_image_size=self._get_current_image_size,
         )
         dock_calib = QDockWidget("Calibration", self)
         dock_calib.setObjectName("Calibration")
@@ -449,6 +450,7 @@ class MainWindow(QMainWindow):
             return
         if K.shape != (3, 3) or len(dist) < 5:
             return
+        self._state.calibration_is_fake = False
         self._state.calibration = CalibrationResult(
             K=K,
             dist=dist,
@@ -476,7 +478,7 @@ class MainWindow(QMainWindow):
         if res is not None:
             settings.setValue("camera_resolution_width", res[0])
             settings.setValue("camera_resolution_height", res[1])
-        if self._state.calibration is not None:
+        if self._state.calibration is not None and not self._state.calibration_is_fake:
             settings.setValue("calib_K", self._state.calibration.K.ravel().tolist())
             settings.setValue("calib_dist", self._state.calibration.dist.ravel().tolist())
         settings.setValue("tools_show_image_coords", self._show_image_coords)
@@ -534,6 +536,17 @@ class MainWindow(QMainWindow):
         doc = self._tabbed_view.current_document()
         if demo is not None and hasattr(demo, "reset_rotation") and doc is not None:
             demo.reset_rotation(doc)
+
+    def _get_current_image_size(self) -> tuple[int, int] | None:
+        """Return (width, height) of the current center image, or None if no image open."""
+        doc = self._tabbed_view.current_document()
+        if doc is None or not hasattr(doc, "image_bgr"):
+            return None
+        img = doc.image_bgr()
+        if img is None or img.size == 0:
+            return None
+        h, w = img.shape[:2]
+        return (w, h)
 
     def _get_demo_context(self) -> dict:
         return {
@@ -618,7 +631,9 @@ class MainWindow(QMainWindow):
             self._state.calibration,
             self._state.chessboard,
         )
-        self._central_stack.setCurrentIndex(1)
+        # Only switch to calibration result view for real calibration; keep tabbed image view for fake K
+        if not self._state.calibration_is_fake:
+            self._central_stack.setCurrentIndex(1)
         self._plot3d.redraw()
 
 

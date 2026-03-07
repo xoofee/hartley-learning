@@ -6,10 +6,11 @@ Single responsibility: chessboard detection and camera calibration.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
+from math import radians, tan
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QWidget,
@@ -161,15 +162,32 @@ class ChessboardParamsWidget(QWidget):
         self._spin_square.setValue(self._params.square_size)
 
 
+def fake_K_from_image_size(w: int, h: int, horizontal_fov_deg: float = 80.0) -> np.ndarray:
+    """Build intrinsic matrix K centered on image with given horizontal FOV (no distortion).
+    K has principal point at (w/2, h/2); fx = (w/2)/tan(h_fov/2), fy = fx (square pixels)."""
+    cx, cy = w / 2.0, h / 2.0
+    half_fov_rad = radians(horizontal_fov_deg / 2.0)
+    fx = (w / 2.0) / tan(half_fov_rad)
+    fy = fx
+    return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+
+
 class CalibrationWidget(QWidget):
     """Chessboard params + Calibrate button; runs calibration and logs result."""
 
     calibration_done = pyqtSignal()
 
-    def __init__(self, state: AppState, get_gallery_paths: callable, parent=None):
+    def __init__(
+        self,
+        state: AppState,
+        get_gallery_paths: Callable[[], List[Path]],
+        get_current_image_size: Optional[Callable[[], Optional[Tuple[int, int]]]] = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._state = state
         self._get_gallery_paths = get_gallery_paths
+        self._get_current_image_size = get_current_image_size
         layout = QVBoxLayout(self)
         group = QGroupBox("Chessboard")
         group_layout = QVBoxLayout()
@@ -180,6 +198,21 @@ class CalibrationWidget(QWidget):
         self._calibrate_btn = QPushButton("Calibrate from gallery")
         self._calibrate_btn.clicked.connect(self._run_calibration)
         layout.addWidget(self._calibrate_btn)
+        # Fake K from current image (temporary, not persisted)
+        fake_group = QGroupBox("Fake K (temporary)")
+        fake_layout = QFormLayout()
+        self._fake_fov_spin = QDoubleSpinBox()
+        self._fake_fov_spin.setRange(1.0, 179.0)
+        self._fake_fov_spin.setValue(80.0)
+        self._fake_fov_spin.setSuffix(" °")
+        self._fake_fov_spin.setToolTip("Horizontal field of view in degrees")
+        fake_layout.addRow(QLabel("Horizontal FOV:"), self._fake_fov_spin)
+        self._fake_k_btn = QPushButton("Fake K from image")
+        self._fake_k_btn.setToolTip("Generate K from the current center image size and FOV. Overwrites K in memory (not saved).")
+        self._fake_k_btn.clicked.connect(self._on_fake_k_from_image)
+        fake_layout.addRow(self._fake_k_btn)
+        fake_group.setLayout(fake_layout)
+        layout.addWidget(fake_group)
         result_group = QGroupBox("Last calibration (K & distortion)")
         self._result_text = QPlainTextEdit()
         self._result_text.setReadOnly(True)
@@ -220,7 +253,34 @@ class CalibrationWidget(QWidget):
         if result is None:
             logging_ui.log("Calibration failed (need at least 2 images with detected chessboards).")
             return
+        self._state.calibration_is_fake = False
         self._state.calibration = result
         log_calibration_result(result)
+        self.refresh_calibration_display()
+        self.calibration_done.emit()
+
+    def _on_fake_k_from_image(self) -> None:
+        """Generate fake K from current center image; overwrites K in memory (not persisted)."""
+        if self._get_current_image_size is None:
+            logging_ui.log("Fake K: no access to current image (internal error).")
+            return
+        size = self._get_current_image_size()
+        if size is None:
+            logging_ui.log("Fake K: open an image in the center first.")
+            return
+        w, h = size
+        h_fov = self._fake_fov_spin.value()
+        K = fake_K_from_image_size(w, h, h_fov)
+        dist = np.zeros(5, dtype=np.float64)
+        self._state.calibration_is_fake = True
+        self._state.calibration = CalibrationResult(
+            K=K,
+            dist=dist,
+            rvecs=[],
+            tvecs=[],
+            reproj_err=0.0,
+            image_paths=[],
+        )
+        logging_ui.log(f"Fake K set from image {w}×{h}, horizontal FOV {h_fov}° (not saved).")
         self.refresh_calibration_display()
         self.calibration_done.emit()
