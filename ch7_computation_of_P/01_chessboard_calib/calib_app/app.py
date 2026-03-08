@@ -50,30 +50,39 @@ SETTINGS_APP = "chessboard_calib"
 register_builtin_demos()
 
 
-class _RotateDemoEventFilter(QObject):
-    """Event filter for tabbed view: forward mouse events to rotate demo when active."""
+class _InteractiveDemoEventFilter(QObject):
+    """Event filter for tabbed view: forward mouse events to the active demo when it has handle_mouse_event."""
 
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
         self._main = main_window
 
     def eventFilter(self, obj, event) -> bool:
-        if self._main._state.current_demo_id != "rotate_image":
+        demo_id = self._main._state.current_demo_id
+        demo = get_demo_by_id(demo_id)
+        if demo is None or not hasattr(demo, "handle_mouse_event"):
             return False
         t = event.type()
         if t not in (QEvent.MouseButtonPress, QEvent.MouseMove, QEvent.MouseButtonRelease):
             return False
         tabbed = self._main._tabbed_view
-        if obj != tabbed:
-            return False
         doc = tabbed.current_document()
         if doc is None:
             return False
-        pos_in_doc = doc.mapFromGlobal(obj.mapToGlobal(event.pos()))
-        event_type = "press" if t == QEvent.MouseButtonPress else ("release" if t == QEvent.MouseButtonRelease else "move")
-        demo = get_demo_by_id("rotate_image")
-        if demo is None or not hasattr(demo, "handle_mouse_event"):
+        # Clicks go to the document widget (or its child), not the tabbed view - accept either
+        def _is_under(w, ancestor):
+            while w:
+                if w is ancestor:
+                    return True
+                w = w.parentWidget()
             return False
+        if obj != tabbed and obj != doc and not _is_under(obj, doc):
+            return False
+        if obj == tabbed:
+            pos_in_doc = doc.mapFromGlobal(tabbed.mapToGlobal(event.pos()))
+        else:
+            pos_in_doc = doc.mapFromGlobal(obj.mapToGlobal(event.pos()))
+        event_type = "press" if t == QEvent.MouseButtonPress else ("release" if t == QEvent.MouseButtonRelease else "move")
         if demo.handle_mouse_event(
             self._main._get_demo_context(),
             doc,
@@ -405,7 +414,7 @@ class MainWindow(QMainWindow):
         self._status_bar = self.statusBar()
         self._status_bar.showMessage("")
 
-        self._rotate_event_filter = _RotateDemoEventFilter(self)
+        self._interactive_demo_event_filter = _InteractiveDemoEventFilter(self)
         logging_ui.log("Calibration app started. Add images and run Calibrate from gallery.")
         self._plot3d.redraw()
 
@@ -604,8 +613,8 @@ class MainWindow(QMainWindow):
             prev.on_deactivated()
         if prev_id == "realtime_pose":
             self._state.realtime_display_frame = None
-        if prev_id == "rotate_image":
-            self._tabbed_view.removeEventFilter(self._rotate_event_filter)
+        if prev_id in ("rotate_image", "vanishing_line"):
+            self._tabbed_view.removeEventFilter(self._interactive_demo_event_filter)
         self._state.current_demo_id = demo_id
         self._state.realtime_pose = None
         try:
@@ -615,8 +624,8 @@ class MainWindow(QMainWindow):
         current = get_demo_by_id(demo_id)
         if current is not None:
             current.on_activated(self._get_demo_context())
-        if demo_id == "rotate_image":
-            self._tabbed_view.installEventFilter(self._rotate_event_filter)
+        if demo_id in ("rotate_image", "vanishing_line"):
+            self._tabbed_view.installEventFilter(self._interactive_demo_event_filter)
         self._plot3d.redraw()
 
     def _on_preview_frame(self, frame) -> None:
