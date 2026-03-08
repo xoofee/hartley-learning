@@ -134,6 +134,50 @@ def _intersect_lines(l1: np.ndarray, l2: np.ndarray) -> np.ndarray:
     return p
 
 
+def _line_through_two_points(p: np.ndarray, q: np.ndarray) -> np.ndarray:
+    """Homogeneous line (3-vec) through two points."""
+    return np.cross(np.asarray(p, dtype=np.float64).ravel()[:3],
+                    np.asarray(q, dtype=np.float64).ravel()[:3])
+
+
+def _clip_line_to_rect(
+    l: np.ndarray,
+    w: int,
+    h: int,
+) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    """Clip infinite line l (ax+by+c=0) to rectangle [0,w] x [0,h]. Returns ((x1,y1),(x2,y2)) or None."""
+    a, b, c = float(l[0]), float(l[1]), float(l[2])
+    pts: List[Tuple[float, float]] = []
+    if abs(b) > 1e-10:
+        for x in (0.0, float(w)):
+            y = -(a * x + c) / b
+            if 0 <= y <= h:
+                pts.append((x, y))
+    if abs(a) > 1e-10:
+        for y in (0.0, float(h)):
+            x = -(b * y + c) / a
+            if 0 <= x <= w:
+                pts.append((x, y))
+    if len(pts) < 2:
+        return None
+    # Deduplicate and take two furthest (or first two if only two)
+    seen = set()
+    unique = []
+    for p in pts:
+        key = (round(p[0], 2), round(p[1], 2))
+        if key not in seen:
+            seen.add(key)
+            unique.append(p)
+    if len(unique) < 2:
+        return None
+    if len(unique) == 2:
+        return ((int(unique[0][0]), int(unique[0][1])), (int(unique[1][0]), int(unique[1][1])))
+    # More than 2: pick two that span the visible segment (e.g. min and max x, or two extremes)
+    p1 = min(unique, key=lambda p: p[0])
+    p2 = max(unique, key=lambda p: p[0])
+    return ((int(p1[0]), int(p1[1])), (int(p2[0]), int(p2[1])))
+
+
 def _vanishing_points_from_rectangle(
     A: Tuple[float, float],
     B: Tuple[float, float],
@@ -389,7 +433,7 @@ class VanishingLineDemo(Demo):
                 cv2.circle(disp, (int(x), int(y)), 6, (0, 255, 0), -1)
                 cv2.putText(disp, "ABCD"[i], (int(x) + 8, int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0))
 
-        # Vanishing points and line
+        # Vanishing points and vanishing line (horizon)
         if s.R is not None and s.v_x is not None and s.v_y is not None:
             h_img, w_img = disp.shape[:2]
             for name, v in [("vx", s.v_x), ("vy", s.v_y)]:
@@ -397,6 +441,12 @@ class VanishingLineDemo(Demo):
                     u, vv = int(v[0] / v[2]), int(v[1] / v[2])
                     if 0 <= u < w_img and 0 <= vv < h_img:
                         cv2.circle(disp, (u, vv), 8, (255, 0, 0), 2)
+            # Vanishing line (horizon): line through v_x and v_y, clipped to image
+            l_inf = _line_through_two_points(s.v_x, s.v_y)
+            seg = _clip_line_to_rect(l_inf, w_img, h_img)
+            if seg is not None:
+                (x1, y1), (x2, y2) = seg
+                cv2.line(disp, (x1, y1), (x2, y2), (255, 165, 0), 2)  # orange horizon
             if s.v_z is not None and np.isfinite(s.v_z).all():
                 vz = s.v_z
                 if abs(vz[2]) > 1e-10:
@@ -511,6 +561,7 @@ class VanishingLineDemo(Demo):
                                 return "inf"
                             return f"({v[0]/v[2]:.1f}, {v[1]/v[2]:.1f})"
                         self._log(f"A B C D set. v_x={_vp_str(vx)}, v_y={_vp_str(vy)}, R computed, v_z={_vp_str(s.v_z)}")
+                        self._log(f"\nR={s.R} \n K={K}")
                     else:
                         s.corners.pop()
                 self._redraw()
@@ -536,13 +587,14 @@ class VanishingLineDemo(Demo):
             if s.p_image is not None:
                 dx = ix - s.p_image[0]
                 dy = iy - s.p_image[1]
-                if dx * dx + dy * dy < 400:  # ~20px
+                if dx * dx + dy * dy < 900:  # 30px radius
                     s.dragging_p = True
                     return True
             return True
 
         if event_type == "release":
             if s.dragging_p and s.p_image is not None and s.h is not None and s.R is not None:
+                self._log(f"Drag ended: P_image=({s.p_image[0]:.3f}, {s.p_image[1]:.3f})")
                 P_world = _ray_ground_intersection(K, s.R, s.h, s.p_image[0], s.p_image[1])
                 if P_world is not None:
                     Q_world = P_world + np.array([0.0, 0.0, 1.0])
@@ -555,6 +607,8 @@ class VanishingLineDemo(Demo):
             return True
 
         if event_type == "move":
+            # self._log(f"Drag moved: P_image=({ix:.3f}, {iy:.3f})")
+            s.p_image = (float(ix), float(iy))
             if s.dragging_p and s.p_image is not None and s.h is not None and s.R is not None:
                 # New P at (ix, iy); compute ground point and Q at height 1
                 P_world = _ray_ground_intersection(K, s.R, s.h, ix, iy)
@@ -562,7 +616,6 @@ class VanishingLineDemo(Demo):
                     Q_world = P_world + np.array([0.0, 0.0, 1.0])
                     qx, qy = _world_to_image(K, s.R, s.h, Q_world)
                     if np.isfinite(qx) and np.isfinite(qy):
-                        s.p_image = (float(ix), float(iy))
                         s.q_image = (qx, qy)
                 self._redraw()
                 return True

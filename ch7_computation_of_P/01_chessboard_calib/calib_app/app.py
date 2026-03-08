@@ -11,7 +11,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QSettings, QEvent, QObject, pyqtSignal
+from PyQt5.QtCore import Qt, QSettings, QEvent, QObject, pyqtSignal, QPoint
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -51,7 +51,8 @@ register_builtin_demos()
 
 
 class _InteractiveDemoEventFilter(QObject):
-    """Event filter for tabbed view: forward mouse events to the active demo when it has handle_mouse_event."""
+    """Event filter: forward mouse events to the active demo when it has handle_mouse_event.
+    Installed on QApplication. For move/release we also accept when cursor is over doc (obj may be window after consumed press)."""
 
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
@@ -69,19 +70,26 @@ class _InteractiveDemoEventFilter(QObject):
         doc = tabbed.current_document()
         if doc is None:
             return False
-        # Clicks go to the document widget (or its child), not the tabbed view - accept either
-        def _is_under(w, ancestor):
-            while w:
-                if w is ancestor:
-                    return True
-                w = w.parentWidget()
-            return False
-        if obj != tabbed and obj != doc and not _is_under(obj, doc):
-            return False
-        if obj == tabbed:
-            pos_in_doc = doc.mapFromGlobal(tabbed.mapToGlobal(event.pos()))
-        else:
-            pos_in_doc = doc.mapFromGlobal(obj.mapToGlobal(event.pos()))
+
+        # Use global pos so coordinates are consistent for press/move/release (e.g. during drag)
+        pos_in_doc = doc.mapFromGlobal(event.globalPos())
+        in_doc_rect = doc.rect().contains(pos_in_doc)
+
+        def _target_in_doc() -> bool:
+            if not isinstance(obj, QWidget):
+                return False
+            def _is_under(w, ancestor):
+                while w:
+                    if w is ancestor:
+                        return True
+                    w = w.parentWidget()
+                return False
+            return obj is tabbed or obj is doc or _is_under(obj, doc)
+
+        # Accept when: event target is doc (or child), OR for move/release when cursor is over doc (obj may be window)
+        if not _target_in_doc():
+            if t == QEvent.MouseButtonPress or not in_doc_rect:
+                return False
         event_type = "press" if t == QEvent.MouseButtonPress else ("release" if t == QEvent.MouseButtonRelease else "move")
         if demo.handle_mouse_event(
             self._main._get_demo_context(),
@@ -144,8 +152,9 @@ class ImageDocumentWidget(QWidget):
         self._view.set_homography(H)
 
     def map_to_image_coords(self, wx: float, wy: float) -> tuple[float, float] | None:
-        """Map widget coords to image pixel (x, y); None if outside image."""
-        return self._view.map_to_image_coords(wx, wy)
+        """Map widget coords (document space) to image pixel (x, y); None if outside image."""
+        view_pt = self._view.mapFrom(self, QPoint(int(wx), int(wy)))
+        return self._view.map_to_image_coords(float(view_pt.x()), float(view_pt.y()))
 
     def image_view(self) -> ImageViewWidget:
         """Reusable image view (for connecting hover_image_coords, etc.)."""
@@ -262,6 +271,31 @@ class CentralTabbedView(QWidget):
             out.append((path, img))
         out.sort(key=lambda x: x[0].name)
         return out
+
+    def get_open_paths_in_tab_order(self) -> list[Path]:
+        """Return paths of open documents in tab order (for persistence)."""
+        paths: list[Path] = []
+        for i in range(self._tab_widget.count()):
+            w = self._tab_widget.widget(i)
+            if w is not self._placeholder and isinstance(w, ImageDocumentWidget):
+                paths.append(w.path())
+        return paths
+
+    def get_current_tab_index(self) -> int:
+        """Return current tab index (0-based; 0 when only placeholder)."""
+        return self._tab_widget.currentIndex()
+
+    def restore_open_paths(self, paths: list[str], current_index: int = 0) -> None:
+        """Open saved paths in order and set current tab. Skips missing files."""
+        for s in paths:
+            p = Path(str(s)).resolve()
+            if p.is_file():
+                self.open_path(p)
+        if self._tab_widget.indexOf(self._placeholder) < 0:
+            n = self._tab_widget.count()
+            if n > 0:
+                idx = min(max(0, current_index), n - 1)
+                self._tab_widget.setCurrentIndex(idx)
 
 
 class MainWindow(QMainWindow):
@@ -471,6 +505,15 @@ class MainWindow(QMainWindow):
         self._action_show_image_coords.setChecked(self._show_image_coords)
         self._action_show_yaw_pitch.setChecked(self._show_yaw_pitch)
         self._refresh_status_bar()
+        # Center widget: restore open images and current tab
+        open_paths = settings.value("center_open_paths")
+        current_tab = settings.value("center_current_tab_index", 0)
+        if open_paths and isinstance(open_paths, list) and len(open_paths) > 0:
+            try:
+                current_tab = int(current_tab) if current_tab is not None else 0
+            except (TypeError, ValueError):
+                current_tab = 0
+            self._tabbed_view.restore_open_paths(open_paths, current_tab)
 
     def _load_persisted_calibration(self, settings: QSettings) -> None:
         """Restore K and dist from settings into state.calibration if present."""
@@ -519,6 +562,10 @@ class MainWindow(QMainWindow):
             settings.setValue("calib_dist", self._state.calibration.dist.ravel().tolist())
         settings.setValue("tools_show_image_coords", self._show_image_coords)
         settings.setValue("tools_show_yaw_pitch", self._show_yaw_pitch)
+        # Center widget: open image paths in tab order and current tab
+        open_paths = self._tabbed_view.get_open_paths_in_tab_order()
+        settings.setValue("center_open_paths", [str(p) for p in open_paths])
+        settings.setValue("center_current_tab_index", self._tabbed_view.get_current_tab_index())
 
     def closeEvent(self, event) -> None:
         self._save_settings()
@@ -614,7 +661,9 @@ class MainWindow(QMainWindow):
         if prev_id == "realtime_pose":
             self._state.realtime_display_frame = None
         if prev_id in ("rotate_image", "vanishing_line"):
-            self._tabbed_view.removeEventFilter(self._interactive_demo_event_filter)
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self._interactive_demo_event_filter)
         self._state.current_demo_id = demo_id
         self._state.realtime_pose = None
         try:
@@ -625,7 +674,9 @@ class MainWindow(QMainWindow):
         if current is not None:
             current.on_activated(self._get_demo_context())
         if demo_id in ("rotate_image", "vanishing_line"):
-            self._tabbed_view.installEventFilter(self._interactive_demo_event_filter)
+            app = QApplication.instance()
+            if app is not None:
+                app.installEventFilter(self._interactive_demo_event_filter)
         self._plot3d.redraw()
 
     def _on_preview_frame(self, frame) -> None:
