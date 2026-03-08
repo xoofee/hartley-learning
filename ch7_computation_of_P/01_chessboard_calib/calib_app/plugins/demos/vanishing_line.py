@@ -87,6 +87,25 @@ $$q_{new} = K R (Q_{world} - C)$$
 
 *Note: The calculated $q_{new}$ will automatically appear to "snap" onto the line connecting $p_{new}$ and the vertical vanishing point $v_z$, ensuring perfect geometric verticality regardless of the user's initial click tolerance.*
 
+
+
+let change a little bit, let P = [0, 0, 0] and Q=[0,0,1]
+
+then get the camera position (x, y, z)
+
+notice that Q may not be strictly conlinear with P and the z vanishing point, so you could
+
+1 minimize a camera center that have minimum d(C, RayP) and d(C, RayQ)，or 
+
+2 minimize camera center that have mimnimum reproj error of P and Q
+
+3 cancel C in the equation and have a mininum algebraic error on the parameters/scalers
+
+
+
+any one is ok, and choose the most feasible for code
+
+
 implement it. remember to make the code modular and flexible and have a good architecture. we may have other demos that require interactive like "click to select, drag a point on it". and some demo do not need this
 
 do not remove this comment
@@ -263,65 +282,63 @@ def _back_project_direction(K: np.ndarray, R: np.ndarray, px: float, py: float) 
     D = R.T @ (np.linalg.inv(K) @ p)
     return D
 
-def _solve_camera_height(
+def _solve_camera_position(
     K: np.ndarray,
     R: np.ndarray,
-    p_px: float,
-    p_py: float,
-    q_px: float,
-    q_py: float,
-) -> Optional[float]:
+    p_img: Tuple[float, float],
+    q_img: Tuple[float, float],
+) -> Optional[np.ndarray]:
     """
-    From base p (Z=0) and top q (Z=1), solve for camera height h.
-    Uses the component (X or Y) with larger denominator for numerical stability
-    (avoids near-zero when PQ is vertical or near the image center).
+    Find camera center C given P=[0,0,0], Q=[0,0,1] in world and image points p, q.
+    Solves s2*dq - s1*dp = Q - P via least squares, then C = P - s1*dp = -s1*dp.
+    Handles non-collinearity of p, q with the vertical vanishing point.
     """
-    D_p = _back_project_direction(K, R, p_px, p_py)
-    D_q = _back_project_direction(K, R, q_px, q_py)
+    K_inv = np.linalg.inv(np.asarray(K, dtype=np.float64))
+    dp = R.T @ (K_inv @ np.array([p_img[0], p_img[1], 1.0], dtype=np.float64))
+    dq = R.T @ (K_inv @ np.array([q_img[0], q_img[1], 1.0], dtype=np.float64))
 
-    denom_x = D_p[0] * D_q[2] - D_p[2] * D_q[0]
-    denom_y = D_p[1] * D_q[2] - D_p[2] * D_q[1]
+    # A @ [s1, s2]^T = B  with  -s1*dp + s2*dq = [0, 0, 1]
+    A = np.column_stack((-dp, dq))
+    B = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
-    if abs(denom_x) > abs(denom_y):
-        if abs(denom_x) < 1e-12:
+    try:
+        scales, *_ = np.linalg.lstsq(A, B, rcond=None)
+        s1, s2 = float(scales[0]), float(scales[1])
+        C = -s1 * dp
+        if not np.all(np.isfinite(C)) or C[2] <= 0:
             return None
-        h = (D_p[0] * D_q[2]) / denom_x
-    else:
-        if abs(denom_y) < 1e-12:
-            return None
-        h = (D_p[1] * D_q[2]) / denom_y
+        return C
+    except (np.linalg.LinAlgError, TypeError):
+        return None
 
-    return float(h) if (h > 0 and np.isfinite(h)) else None
 
-def _ray_ground_intersection(
+def _ray_ground_intersection_with_C(
     K: np.ndarray,
     R: np.ndarray,
-    h: float,
+    C: np.ndarray,
     px: float,
     py: float,
 ) -> Optional[np.ndarray]:
-    """P_world on ground (Z=0) from camera at (0,0,h). P = C - (h/D_z) * D."""
+    """Point on ground plane Z=0 where ray from camera C through pixel (px, py) hits."""
     D = _back_project_direction(K, R, px, py)
     if abs(D[2]) < 1e-12:
         return None
-    C = np.array([0.0, 0.0, h], dtype=np.float64)
-    lam = -h / D[2]
-    P = C + lam * D
+    s = -C[2] / D[2]
+    P = C + s * D
     return P
 
 
-def _world_to_image(
+def _world_to_image_with_C(
     K: np.ndarray,
     R: np.ndarray,
-    h: float,
+    C: np.ndarray,
     P_world: np.ndarray,
 ) -> Tuple[float, float]:
-    """Project world point to image. Q_cam = R (P_world - C), q = K @ Q_cam."""
-    C = np.array([0.0, 0.0, h], dtype=np.float64)
-    Q_cam = R @ (P_world - C)
-    if Q_cam[2] <= 0:
+    """Project world point to image using explicit camera center C. p = K @ R @ (P_world - C)."""
+    p_cam = R @ (np.asarray(P_world, dtype=np.float64).ravel()[:3] - C)
+    if p_cam[2] <= 0:
         return float("nan"), float("nan")
-    q = K @ Q_cam
+    q = K @ p_cam
     return float(q[0] / q[2]), float(q[1] / q[2])
 
 
@@ -336,7 +353,7 @@ class _VanishingLineState:
         self.v_x: Optional[np.ndarray] = None
         self.v_y: Optional[np.ndarray] = None
         self.v_z: Optional[np.ndarray] = None
-        self.h: Optional[float] = None
+        self.C: Optional[np.ndarray] = None  # camera center (x, y, z), from P=[0,0,0], Q=[0,0,1]
         self.p_image: Optional[Tuple[float, float]] = None  # base on ground
         self.q_image: Optional[Tuple[float, float]] = None  # top (height 1)
         self.dragging_p: bool = False
@@ -537,7 +554,7 @@ class VanishingLineDemo(Demo):
             self._state.v_x = None
             self._state.v_y = None
             self._state.v_z = None
-            self._state.h = None
+            self._state.C = None
             self._state.p_image = None
             self._state.q_image = None
             self._state.dragging_p = False
@@ -602,12 +619,13 @@ class VanishingLineDemo(Demo):
                 return True
             if s.q_image is None:
                 s.q_image = (float(ix), float(iy))
-                h = _solve_camera_height(K, s.R, s.p_image[0], s.p_image[1], ix, iy)
-                if h is not None and h > 0:
-                    s.h = h
+                C = _solve_camera_position(K, s.R, s.p_image, (float(ix), float(iy)))
+                if C is not None:
+                    s.C = C
+                    self._log(f"Clicked Q at ({ix:.1f}, {iy:.1f}); camera center C = ({C[0]:.3f}, {C[1]:.3f}, {C[2]:.3f})")
                 else:
-                    s.h = 1.0  # fallback
-                self._log(f"Clicked Q at ({ix:.1f}, {iy:.1f}); camera height h = {s.h:.4f}")
+                    s.C = np.array([0.0, 0.0, 1.0], dtype=np.float64)  # fallback
+                    self._log(f"Clicked Q at ({ix:.1f}, {iy:.1f}); C solve failed, using fallback")
                 self._redraw()
                 return True
             # Check if click is near P -> start drag
@@ -620,9 +638,9 @@ class VanishingLineDemo(Demo):
             return True
 
         if event_type == "release":
-            if s.dragging_p and s.p_image is not None and s.h is not None and s.R is not None:
+            if s.dragging_p and s.p_image is not None and s.C is not None and s.R is not None:
                 self._log(f"Drag ended: P_image=({s.p_image[0]:.3f}, {s.p_image[1]:.3f})")
-                P_world = _ray_ground_intersection(K, s.R, s.h, s.p_image[0], s.p_image[1])
+                P_world = _ray_ground_intersection_with_C(K, s.R, s.C, s.p_image[0], s.p_image[1])
                 if P_world is not None:
                     Q_world = P_world + np.array([0.0, 0.0, 1.0])
                     self._log(
@@ -634,14 +652,14 @@ class VanishingLineDemo(Demo):
             return True
 
         if event_type == "move":
-            # self._log(f"Drag moved: P_image=({ix:.3f}, {iy:.3f})")
-            if s.dragging_p and s.p_image is not None and s.h is not None and s.R is not None:
-                # New P at (ix, iy); compute ground point and Q at height 1
-                P_world = _ray_ground_intersection(K, s.R, s.h, ix, iy)
+            if s.dragging_p and s.C is not None and s.R is not None:
+                # New P at (ix, iy); ray from C hits ground Z=0 at P_world; Q_world = P_world + [0,0,1]
+                P_world = _ray_ground_intersection_with_C(K, s.R, s.C, ix, iy)
                 if P_world is not None:
                     Q_world = P_world + np.array([0.0, 0.0, 1.0])
-                    qx, qy = _world_to_image(K, s.R, s.h, Q_world)
+                    qx, qy = _world_to_image_with_C(K, s.R, s.C, Q_world)
                     if np.isfinite(qx) and np.isfinite(qy):
+                        s.p_image = (float(ix), float(iy))
                         s.q_image = (qx, qy)
                 self._redraw()
                 return True
