@@ -207,30 +207,49 @@ def _rotation_from_vanishing_points(
     v_y: np.ndarray,
 ) -> Optional[np.ndarray]:
     """
-    R such that world X direction goes to v_x, world Y to v_y, Z up.
-    r1 = K^{-1}v_x / |...|, r2 = K^{-1}v_y / |...|, r3 = r1 x r2.
-    R is 3x3 with columns r1, r2, r3 (camera rotation from world to camera).
+    R from world to camera: r1 from v_x, r2 orthogonalized from v_y (Gram-Schmidt), r3 = r1 x r2.
+    Rays are forced to point forward (d[2] > 0); det(R) = 1 (right-handed).
     """
-    K = np.asarray(K, dtype=np.float64)
-    v_x = np.asarray(v_x, dtype=np.float64).ravel()[:3]
-    v_y = np.asarray(v_y, dtype=np.float64).ravel()[:3]
-    K_inv = np.linalg.inv(K)
-    r1 = K_inv @ v_x
-    r2 = K_inv @ v_y
-    n1 = np.linalg.norm(r1)
-    n2 = np.linalg.norm(r2)
+    K_inv = np.linalg.inv(np.asarray(K, dtype=np.float64))
+
+    # 1. Back-project to rays in camera coordinates
+    d1 = K_inv @ np.asarray(v_x, dtype=np.float64).ravel()[:3]
+    d2 = K_inv @ np.asarray(v_y, dtype=np.float64).ravel()[:3]
+    
+    # 2. Force vectors to point "away" from camera (positive Z)
+    # This prevents the R matrix from flipping the world behind the camera
+    if d1[2] < 0: d1 = -d1
+    if d2[2] < 0: d2 = -d2
+
+    n1 = np.linalg.norm(d1)
+    n2 = np.linalg.norm(d2)
     if n1 < 1e-10 or n2 < 1e-10:
         return None
-    r1 = r1 / n1
-    r2 = r2 / n2
+    
+    r1 = d1 / n1
+    r2 = d2 / n2
+
+    # 3. Gram-Schmidt Orthogonalization
+    # User input is noisy; we must force r1 and r2 to be orthogonal.
+    # We keep r1 (X-axis) as the primary direction and adjust r2.
     r3 = np.cross(r1, r2)
     n3 = np.linalg.norm(r3)
     if n3 < 1e-10:
         return None
     r3 = r3 / n3
-    R = np.column_stack((r1, r2, r3))
-    return R
+    
+    # Re-compute r2 to ensure it is perfectly orthogonal to r1 and r3
+    r2 = np.cross(r3, r1)
 
+    # 4. Final R assembly
+    R = np.column_stack((r1, r2, r3))
+    
+    # 5. Coordinate System Check (Right-Handed)
+    # Ensure determinant is 1, not -1 (prevents mirroring)
+    if np.linalg.det(R) < 0:
+        R[:, 2] = -R[:, 2] # Flip Z if necessary
+        
+    return R
 
 def _vertical_vanishing_point(K: np.ndarray, R: np.ndarray) -> np.ndarray:
     """v_z = K @ r3 (direction of world Z in image)."""
@@ -244,27 +263,35 @@ def _back_project_direction(K: np.ndarray, R: np.ndarray, px: float, py: float) 
     D = R.T @ (np.linalg.inv(K) @ p)
     return D
 
-
 def _solve_camera_height(
     K: np.ndarray,
     R: np.ndarray,
-    p_px: float, p_py: float,
-    q_px: float, q_py: float,
+    p_px: float,
+    p_py: float,
+    q_px: float,
+    q_py: float,
 ) -> Optional[float]:
     """
-    From base point p and top point q (image coords), solve h so that
-    P is on ground Z=0 and Q = P + (0,0,1). Formula: h = D_px*D_qz / (D_px*D_qz - D_pz*D_qx).
+    From base p (Z=0) and top q (Z=1), solve for camera height h.
+    Uses the component (X or Y) with larger denominator for numerical stability
+    (avoids near-zero when PQ is vertical or near the image center).
     """
     D_p = _back_project_direction(K, R, p_px, p_py)
     D_q = _back_project_direction(K, R, q_px, q_py)
-    denom = D_p[0] * D_q[2] - D_p[2] * D_q[0]
-    if abs(denom) < 1e-12:
-        return None
-    h = (D_p[0] * D_q[2]) / denom
-    if h <= 0 or not np.isfinite(h):
-        return None
-    return float(h)
 
+    denom_x = D_p[0] * D_q[2] - D_p[2] * D_q[0]
+    denom_y = D_p[1] * D_q[2] - D_p[2] * D_q[1]
+
+    if abs(denom_x) > abs(denom_y):
+        if abs(denom_x) < 1e-12:
+            return None
+        h = (D_p[0] * D_q[2]) / denom_x
+    else:
+        if abs(denom_y) < 1e-12:
+            return None
+        h = (D_p[1] * D_q[2]) / denom_y
+
+    return float(h) if (h > 0 and np.isfinite(h)) else None
 
 def _ray_ground_intersection(
     K: np.ndarray,
@@ -608,7 +635,6 @@ class VanishingLineDemo(Demo):
 
         if event_type == "move":
             # self._log(f"Drag moved: P_image=({ix:.3f}, {iy:.3f})")
-            s.p_image = (float(ix), float(iy))
             if s.dragging_p and s.p_image is not None and s.h is not None and s.R is not None:
                 # New P at (ix, iy); compute ground point and Q at height 1
                 P_world = _ray_ground_intersection(K, s.R, s.h, ix, iy)
